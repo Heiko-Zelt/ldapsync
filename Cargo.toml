@@ -1,0 +1,23 @@
+[package]
+name = "ldapsync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# "sudo apt install pkg-config" to use OpenSSL-Devel
+ldap3 = "0.11"
+log = "0.4"
+env_logger = "0.10"
+pickledb = "0.5"
+tokio = { version = "1", features = ["full"] }
+chrono = "0.4"
+
+[dev-dependencies]
+indoc = "2.0"
+rstest = "0.18"
+
+# "sudo apt install slapd" because OpenLDAP server is needed
+ldap-test-server = "0.0"
+#async-std = { version = "1", features = ["attributes", "tokio1"] }
+#futures = "0.3"
+#futures = "0.2"
