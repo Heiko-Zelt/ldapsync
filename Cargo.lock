@@ -566,7 +566,10 @@ dependencies = [
  "ldap3",
  "log",
  "pickledb",
+ "regex",
  "rstest",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

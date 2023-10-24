@@ -1,15 +1,15 @@
+pub mod sub;
+
 use chrono::{Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConn, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
-use std::{collections::HashSet, env};
+use std::{env, time::Duration, path::Path};
+use std::collections::{HashSet, HashMap};
 
-#[derive(Debug)]
-pub struct LdapService {
-    pub url: String,
-    pub bind_dn: String,
-    pub password: String,
-    pub base_dn: String,
-}
+use crate::sub::app_config::AppConfig;
+use crate::sub::synchronisation::Synchronisation;
+use crate::sub::cf_services::LdapService;
+
 
 /// Joins 2 distinguished names.
 /// Both parts may be empty strings.
