@@ -21,6 +21,12 @@ To avoid reading and comparing the whole content of the subtrees every time, the
  * Added and modified LDAP entries are found by modifyTimestamp attribute.
    modifyTimestamp must be greater or equal to the time of the last successful synchronisation.
  * Deleted LDAP entries are found by the difference in the list of DNs in source and target directory.
+ * Moved entries are first deleted and then added. Inbetween they are missing.
+   The data is inconsistent for a short time. But unique costraints are respected.
+
+The time of the last successful synchronisation has to be stored somewhere,
+to be persitent between restarts of the daemon.
+It is stored in an entry in one of the ldap servers.
 
 ## Simple Example
 
@@ -33,8 +39,9 @@ If you deploy in Cloud Foundry, then create 2 services:
 cf cups ldap1 -p "url, base_dn, bind_dn, password"
 cf cups ldap2 -p "url, base_dn, bind_dn, password"
 ```
-If not, set the environment variable VCAP_SERVICES like below and the other user provided variables:
-The content of VCAP_SERVICES contains a lot of overhead.
+If not, set the environment variable VCAP_SERVICES like below and the other user provided variables.
+Cloud Foundry's VCAP_SERVICES JSON code usually contains a lot of data, which is unneccessary.
+Only the following minimal JSON code is needed.
 
 ```
 #!/bin/bash
@@ -72,7 +79,7 @@ export SYNCHRONISATIONS='[{
         "cn=roles"
     ],
     "ts_store": "ldap2",
-    "ts_base_dn": ""
+    "ts_dn": "o=ldap1-ldap2,o=sync_timestamps"
 }]'
 ./ldapsync
 ```
@@ -140,12 +147,12 @@ export VCAP_SERVICES="export VCAP_SERVICES='{
   ]
 }'"
 export SYNCHRONISATIONS="[
-    {"source": "ldap2", "target": "hub1", "base_dns": ["o=org2"], "ts_store": "hub1", "ts_base_dn": "cn=sync_timestamps"},
-    {"source": "ldap3", "target": "hub1", "base_dns": ["o=org3"], "ts_store": "hub1", "ts_base_dn": "cn=sync_timestamps"},
-    {"source": "ldap4", "target": "hub1", "base_dns": ["o=org4"], "ts_store": "hub1", "ts_base_dn": "cn=sync_timestamps"},
-    {"source": "hub1", "target": "ldap2", "base_dns": ["o=org1",           "o=org3", "o=org4"], "ts_store": "hub1", "ts_base_dn": "cn=sync_timestamps"},
-    {"source": "hub1", "target": "ldap3", "base_dns": ["o=org1", "o=org2",           "o=org4"], "ts_store": "hub1", "ts_base_dn": "cn=sync_timestamps"},
-    {"source": "hub1", "target": "ldap4", "base_dns": ["o=org1", "o=org2", "o=org3"          ], "ts_store": "hub1", "ts_base_dn": "cn=sync_timestamps"}
+    {"source": "ldap2", "target": "hub1", "base_dns": ["o=org2"], "ts_store": "hub1", "ts_dn": "o=ldap2-hub1,o=sync_timestamps"},
+    {"source": "ldap3", "target": "hub1", "base_dns": ["o=org3"], "ts_store": "hub1", "ts_dn": "o=ldap3-hub1,o=sync_timestamps"},
+    {"source": "ldap4", "target": "hub1", "base_dns": ["o=org4"], "ts_store": "hub1", "ts_dn": "o=ldap4-hub1,o=sync_timestamps"},
+    {"source": "hub1", "target": "ldap2", "base_dns": ["o=org1",           "o=org3", "o=org4"], "ts_store": "hub1", "ts_dn": "o=hub1-ldap2,o=sync_timestamps"},
+    {"source": "hub1", "target": "ldap3", "base_dns": ["o=org1", "o=org2",           "o=org4"], "ts_store": "hub1", "ts_dn": "o=hub1-ldap3,o=sync_timestamps"},
+    {"source": "hub1", "target": "ldap4", "base_dns": ["o=org1", "o=org2", "o=org3"          ], "ts_store": "hub1", "ts_dn": "o=hub1-ldap4,o=sync_timestamps"}
 ]"
 ./ldapsync
 ```

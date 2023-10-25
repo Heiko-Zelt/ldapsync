@@ -11,6 +11,7 @@ use std::env;
 
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
 
+// todo JsonMalformed erweitern um Infos zum Parsing Error, Zeile, Spalte, Syntax Fehler
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum Error<'a> {
     EnvNotSet(&'a str),

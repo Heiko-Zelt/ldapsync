@@ -5,16 +5,15 @@ use std::collections::HashMap;
 use std::{env, str::FromStr, time::Duration};
 
 use crate::sub::synchronisation_config::SynchronisationConfig;
-use crate::sub::cf_services::{get_services, get_service_by_name, LdapService};
-
+use crate::sub::cf_services::{get_ldap_services_by_names, LdapService};
 
 
 #[derive(Debug)]
 pub struct AppConfig {
-    job_sleep: Duration,
-    dry_run: bool,
-    ldap_services: HashMap<String, LdapService>,
-    synchronisations: Vec<SynchronisationConfig>, // todo change to syncronisations (with refs)
+    pub job_sleep: Duration,
+    pub dry_run: bool,
+    pub ldap_services: HashMap<String, LdapService>,
+    pub synchronisation_configs: Vec<SynchronisationConfig>, // todo change to syncronisations (with refs)
 }
 
 impl AppConfig {
@@ -33,36 +32,20 @@ impl AppConfig {
         }
     }
 
-    fn from_cf_env() -> AppConfig {
-        println!("F R O M   C F   E N V");
+    pub fn from_cf_env() -> AppConfig {
+        debug!("from_cf_env()");
         let job_sleep_str = env::var("JOB_SLEEP").unwrap();
-        info!("JOB_SLEEP: >>>{}<<<", job_sleep_str);
+        debug!("JOB_SLEEP: {}", job_sleep_str);
         let dry_run_str = env::var("DRY_RUN").unwrap();
-        let ldap_services_map = HashMap::new();
+        debug!("DRY_RUN: {}", dry_run_str);
 
-        let cf_services = get_services();
-        match cf_services {
-            Ok(s) => {
-                println!("s: {:?}", s);
-            }
-            Err(e) => {
-                println!("e: {:?}", e);
-            }
-        }
-
-        println!("VCAP_SERVICES: {:?}", env::var("VCAP_SERVICES"));
-
-        let services = get_service_by_name::<LdapService>("ldap1");
-        println!("cf services by type: {:?}", services);
-        /*
-                let ldap_services_map = services
-                    .iter()
-                    .map(|service| (service.name, LdapService {
-        service.credentials
-                    }))
-                    .collect();
-         */
+        debug!("VCAP_SERVICES: {:?}", env::var("VCAP_SERVICES"));
+        let ldap_services_map = get_ldap_services_by_names().unwrap();
+        debug!("ldap services by names: {:?}", ldap_services_map);
+        
         let synchronisations_json = env::var("SYNCHRONISATIONS").unwrap();
+        debug!("SYNCHRONISATIONS: {}", synchronisations_json);
+
         //let synchronisations_vec = Vec::new();
 
         let synchronisations_vec =
@@ -73,7 +56,7 @@ impl AppConfig {
             job_sleep: Self::parse_duration(&job_sleep_str),
             dry_run: bool::from_str(&dry_run_str).unwrap(),
             ldap_services: ldap_services_map,
-            synchronisations: synchronisations_vec,
+            synchronisation_configs: synchronisations_vec,
         };
         config
     }
@@ -94,22 +77,22 @@ mod test {
             indoc! {r#"{
             "user-provided": [
                 {
+                    "name": "ldap1",
                     "credentials": {
                         "base_dn": "dc=de",
                         "bind_dn": "cn=admin1,dc=de",
                         "password": "secret1",
                         "url": "ldap://ldap1.provider.de:389"
-                     },
-                    "name": "ldap1",
+                     }
                 },
                 {
+                    "name": "ldap2",
                     "credentials": {
                         "base_dn": "dc=de",
                         "bind_dn": "cn=admin2,dc=de",
                         "password": "secret2",
                         "url": "ldap://ldap2.consumer.de:389"
-                    },
-                    "name": "ldap2",
+                    }
                 }
             ]
         }"#},
@@ -122,13 +105,14 @@ mod test {
                 "target":"ldap2",
                 "base_dns":["cn=users","cn=groups"],
                 "ts_store":"ldap2",
-                "ts_base_dn":"cn=sync_timestamps"
+                "ts_dn":"o=ldap1-ldap2,o=sync_timestamps"
             }]
         "#},
         );
 
         let app_config = AppConfig::from_cf_env();
         debug!("app_config: {:?}", app_config);
+        //todo assert
     }
 
     #[rstest]
