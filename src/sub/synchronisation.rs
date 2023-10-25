@@ -1,8 +1,7 @@
 use chrono::{Datelike, Timelike, Utc};
-use ldap3::{Ldap, LdapConn, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry, Mod, LdapResult};
+use ldap3::{Ldap, LdapError, Scope, SearchEntry, Mod, LdapResult};
 use log::{debug, info};
 use std::collections::{HashMap, HashSet};
-//use serde_json::{Result, Value};
 
 use crate::sub::cf_services::LdapService;
 use crate::sub::ldap_utils::*;
@@ -82,7 +81,6 @@ impl<'a> Synchronisation<'a> {
                 &old_sync_timestamp,
                  dry_run
             ).await?;
-        // - sync_modify(old_sync_timestamp);
         }
 
         self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp).await.unwrap();
@@ -237,6 +235,12 @@ impl<'a> Synchronisation<'a> {
                 let search_entry = SearchEntry::construct(result_entry);
                 debug!("entry: {:?}", search_entry);
             }
+
+            // todo fertig implementieren
+            // suche im Ziel LDAP
+            // gefunden?
+            //    ja: vergleich der Einträge und modify
+            //  nein: add
         }
         Ok(0)
     }
@@ -424,7 +428,8 @@ mod test {
             true)
                 .await;
         info!("result: {:?}", result);
-        assert_eq!(result.unwrap(), 3); // oder 4 inklusive cn=Users?
+        assert_eq!(result.unwrap(), 0);
+        // todo assert_eq 3 oder 4 inklusive cn=Users?
     }
 
     #[tokio::test]

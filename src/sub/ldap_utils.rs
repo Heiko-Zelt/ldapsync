@@ -1,5 +1,5 @@
-use ldap3::{Ldap, LdapConn, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry};
-use std::collections::HashSet;
+use ldap3::{Ldap, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry, Mod};
+use std::collections::{HashSet, HashMap};
 use log::{debug, info};
 
 use crate::sub::cf_services::LdapService;
@@ -104,6 +104,40 @@ pub async fn search_norm_dns(
     Ok(norm_dns)
 }
 
+
+
+pub fn diff_attributes(source_attrs: &HashMap<String, Vec<String>>, target_attrs: &HashMap<String, Vec<String>>) -> Vec<Mod<String>> {
+    let source_set: HashSet<String> = source_attrs.keys().cloned().collect();
+    let target_set: HashSet<String> = target_attrs.keys().cloned().collect();
+    let missing = source_set.difference(&target_set);
+    let garbage = target_set.difference(&source_set);
+    let common= source_set.intersection(&target_set);
+
+    let mut mods: Vec<Mod<String>> = Vec::new();
+
+    for attr_name in garbage {
+        let delete = Mod::Delete(attr_name.clone(), HashSet::new());
+        mods.push(delete);
+    };
+    for attr_name in missing {
+        let source_values_vec = source_attrs.get(attr_name).unwrap();
+        let source_values_set: HashSet<String> = HashSet::from_iter(source_values_vec.iter().cloned());
+        let add = Mod::Add(attr_name.clone(), source_values_set);
+        mods.push(add);
+    };
+    for attr_name in common {
+        let source_values_vec = source_attrs.get(attr_name).unwrap().clone();
+        let target_values_vec = target_attrs.get(attr_name).unwrap().clone();
+        let source_values: HashSet<String> = HashSet::from_iter(source_values_vec);
+        let target_values: HashSet<String> = HashSet::from_iter(target_values_vec);
+        let mut sym_diff = source_values.symmetric_difference(&target_values);
+        if sym_diff.next().is_some() {
+            let replace = Mod::Replace(attr_name.clone(), source_values);
+            mods.push(replace);
+        } 
+    };
+    mods
+}
 
 #[cfg(test)]
 pub mod test {
@@ -337,6 +371,37 @@ pub mod test {
         let target_ldap = simple_connect(&target_service).await;
         debug!("source ldap conn: {:?}", source_ldap);
         debug!("target ldap conn: {:?}", target_ldap);
+    }
+
+    #[test]
+    fn test_diff_attributes() {
+        let _ = env_logger::try_init();
+
+        let source = HashMap::from([
+            ("instruments".to_string(), vec!["violin".to_string(), "clarinette".to_string(), "flute".to_string()]),
+            ("name".to_string(), vec!["Magic Orchestra".to_string()]),
+            ("l".to_string(), vec!["Frankfurt".to_string()]),
+            ("stateorprovincename".to_string(), vec!["Hessen".to_string()])
+        ]);
+        let target = HashMap::from([
+            ("instruments".to_string(), vec!["violin".to_string(), "clarinette".to_string(), "oboe".to_string()]),
+            ("name".to_string(), vec!["Old Orchestra".to_string()]),
+            ("o".to_string(), vec!["Hessischer Rundfunkt".to_string()]),
+            ("stateorprovincename".to_string(), vec!["Hessen".to_string()])
+        ]);
+        let result = diff_attributes(&source, &target);
+        debug!("result {:?}", result);
+
+        assert_eq!(result.len(), 4);
+        let empty_set = HashSet::new();
+        let location_set = HashSet::from(["Frankfurt".to_string()]);
+        let instruments_set = HashSet::from(["violin".to_string(), "clarinette".to_string(), "flute".to_string()]);
+        let name_set = HashSet::from(["Magic Orchestra".to_string()]);
+
+        assert!(result.contains(&Mod::Delete("o".to_string(), empty_set)));
+        assert!(result.contains(&Mod::Add("l".to_string(), location_set)));
+        assert!(result.contains(&Mod::Replace("instruments".to_string(), instruments_set)));
+        assert!(result.contains(&Mod::Replace("name".to_string(), name_set)));
     }
 
         /*
