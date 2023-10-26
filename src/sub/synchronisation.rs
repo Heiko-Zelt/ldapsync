@@ -1,8 +1,8 @@
 use chrono::{Datelike, Timelike, Utc};
-use ldap3::{Ldap, LdapError, Scope, SearchEntry, Mod, LdapResult};
+use ldap3::{Ldap, LdapError, LdapResult, Mod, Scope, SearchEntry};
 use log::{debug, info};
-use std::collections::{HashMap, HashSet};
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 
 use crate::sub::cf_services::LdapService;
 use crate::sub::ldap_utils::*;
@@ -21,7 +21,7 @@ pub struct Synchronisation<'a> {
     pub ldap_services: &'a HashMap<String, LdapService>,
     pub sync_config: &'a SynchronisationConfig,
     pub exclude_attrs: &'a Regex,
-    pub dry_run: bool
+    pub dry_run: bool,
 }
 
 impl<'a> Synchronisation<'a> {
@@ -74,8 +74,9 @@ impl<'a> Synchronisation<'a> {
                 &source_service.base_dn,
                 &target_service.base_dn,
                 dn,
-                self.dry_run
-            ).await?;
+                self.dry_run,
+            )
+            .await?;
             Self::sync_modify(
                 &mut source_ldap,
                 &mut target_ldap,
@@ -83,21 +84,28 @@ impl<'a> Synchronisation<'a> {
                 &target_service.base_dn,
                 &dn,
                 &old_sync_timestamp,
-                 self.dry_run
-            ).await?;
+                self.dry_run,
+            )
+            .await?;
         }
 
-        self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp).await.unwrap();
+        self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
+            .await
+            .unwrap();
         Ok(0)
     }
 
     /// return type Option<LdapError> would be good enough
-    pub async fn save_sync_timestamp(&self, ldap: &mut Ldap, sync_timestamp: &str) -> Result<LdapResult, LdapError> {
+    pub async fn save_sync_timestamp(
+        &self,
+        ldap: &mut Ldap,
+        sync_timestamp: &str,
+    ) -> Result<LdapResult, LdapError> {
         let new_values = HashSet::from([sync_timestamp]);
         let modi = Mod::Replace(SYNC_TIMESTAMP_ATTR_NAME, new_values);
         let mods = vec![modi];
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
-        let dn =join_2_dns(&self.sync_config.ts_dn, &ts_store_service.base_dn);
+        let dn = join_2_dns(&self.sync_config.ts_dn, &ts_store_service.base_dn);
         ldap.modify(&dn, mods).await
     }
 
@@ -110,18 +118,22 @@ impl<'a> Synchronisation<'a> {
         let dn = join_2_dns(&self.sync_config.ts_dn, ts_store_service_base_dn);
         debug!("loading sync timestamp from dn: {}", dn);
         let search_result = ldap
-        .search(
-            &dn,
-            Scope::Base,
-            &format!("(objectClass={})", SYNC_TIMESTAMP_OBJ_CLASS),
-            vec![SYNC_TIMESTAMP_ATTR_NAME])
-        .await?;
+            .search(
+                &dn,
+                Scope::Base,
+                &format!("(objectClass={})", SYNC_TIMESTAMP_OBJ_CLASS),
+                vec![SYNC_TIMESTAMP_ATTR_NAME],
+            )
+            .await?;
         let ldap_result = search_result.1;
         debug!("LDAP result code: {}", ldap_result.rc);
-        if ldap_result.rc != 0 { // Is result code ok?
-            return Err(LdapError::LdapResult{result: ldap_result})
+        if ldap_result.rc != 0 {
+            // Is result code ok?
+            return Err(LdapError::LdapResult {
+                result: ldap_result,
+            });
         }
-           
+
         let result_entries = search_result.0;
         // todo pruefen: sollte genau 1 sein
         debug!("number of entries: {}", result_entries.len());
@@ -200,16 +212,16 @@ impl<'a> Synchronisation<'a> {
     /// - Attribut in Quell-Verzeichnis vorhanden und nicht in Ziel => Mod::Add, Attribut (mit allen Werten) hinzufügen
     ///
     /// returns: Wenn erfolgreich: Anzahl der abgeglichenen Einträge (add + modify)
-    /// 
+    ///
     /// todo vollständig implementieren
     pub async fn sync_modify(
         source_ldap: &mut Ldap,
         target_ldap: &mut Ldap,
         source_base_dn: &str,
-        _target_base_dn: &str,
+        target_base_dn: &str,
         sync_dn: &str,
         old_modify_timestamp: &str,
-        _dry_run: bool
+        dry_run: bool,
     ) -> Result<usize, LdapError> {
         info!(
             "sync_modify(source_ldap: {:?}, target_ldap: {:?}, old_modify_timestamp: {:?})",
@@ -217,36 +229,77 @@ impl<'a> Synchronisation<'a> {
         );
 
         // im Quell-LDAP alle geänderten Einträge suchen
-
         let filter = format!("(modifyTimestamp>={})", old_modify_timestamp);
-        debug!("start search with filter: {}", filter);
-
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
-        let search_result = source_ldap
+        debug!("search with base: {}, filter: {}", source_sync_dn, filter);
+        let source_search_result = source_ldap
             .search(&source_sync_dn, Scope::Subtree, &filter, vec!["*"])
             .await?;
         debug!("finished search");
 
-        let ldap_result = search_result.1;
-        info!("LDAP result code: {}", ldap_result.rc);
-        if ldap_result.rc == 0 {
-            // Is result code ok?
-            let result_entries = search_result.0;
-            // Attribute im Ziel-LDAP ersetzen oder Eintrag neu anlegen
-            info!("number of entries: {}", result_entries.len());
-            
-            for result_entry in result_entries {
-                let search_entry = SearchEntry::construct(result_entry);
-                debug!("entry: {:?}", search_entry);
-            }
+        // todo filter excluded_attributes
+        // todo sort desc attr name
 
-            // todo fertig implementieren
-            // suche im Ziel LDAP
-            // gefunden?
-            //    ja: vergleich der Einträge und modify
-            //  nein: add
+        let source_ldap_result = source_search_result.1;
+        info!("LDAP result code: {}", source_ldap_result.rc);
+        if source_ldap_result.rc == 0 {
+            // Is result code ok?
+            let source_result_entries = source_search_result.0;
+            // Attribute im Ziel-LDAP ersetzen oder Eintrag neu anlegen
+            info!("number of entries: {}", source_result_entries.len());
+
+            let source_base_dn_len = source_base_dn.len();
+            for source_result_entry in source_result_entries {
+                let source_search_entry = SearchEntry::construct(source_result_entry);
+                sync_modify_one_entry(
+                    target_ldap,
+                    source_base_dn_len,
+                    target_base_dn,
+                    source_search_entry,
+                    dry_run,
+                ).await?;
+            }
         }
+        // todo korrekte Anzahl zurückgeben
         Ok(0)
+    }
+}
+
+/// todo implement dry_run
+/// returns true if entry was modified or false if added
+pub async fn sync_modify_one_entry(
+    target_ldap: &mut Ldap,
+    source_base_dn_len: usize,
+    target_base_dn: &str,
+    source_search_entry: SearchEntry,
+    _dry_run: bool,
+) -> Result<bool, LdapError> {
+    debug!("source entry: {:?}", source_search_entry);
+
+    let mut trunc_dn = source_search_entry.dn.clone();
+    truncate_dn(&mut trunc_dn, source_base_dn_len);
+    let target_dn = join_2_dns(&trunc_dn, target_base_dn);
+    let target_search_entry = search_one_entry_by_dn(target_ldap, &target_dn).await?;
+    match target_search_entry {
+        Some(entry) => {
+            let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
+            target_ldap.modify(&target_dn, mods).await?;
+            Ok(true)
+        }
+        None => {
+            // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
+            let target_attrs = source_search_entry
+                .attrs
+                .iter()
+                .map(|(attr_name, attr_values)| {
+                    let a: String = attr_name.clone();
+                    let vs: HashSet<String> = HashSet::from_iter(attr_values.iter().cloned());
+                    (a, vs)
+                })
+                .collect::<Vec<(String, HashSet<String>)>>();
+            target_ldap.add(&target_dn, target_attrs).await?;
+            Ok(false)
+        }
     }
 }
 
@@ -421,16 +474,16 @@ mod test {
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
 
-        let result =
-            Synchronisation::sync_modify(
-                &mut source_ldap,
-                &mut target_ldap,
-                &source_base_dn,
-                &target_base_dn,
-                "ou=Users",
-                old_modify_timestamp,
-            true)
-                .await;
+        let result = Synchronisation::sync_modify(
+            &mut source_ldap,
+            &mut target_ldap,
+            &source_base_dn,
+            &target_base_dn,
+            "ou=Users",
+            old_modify_timestamp,
+            true,
+        )
+        .await;
         info!("result: {:?}", result);
         assert_eq!(result.unwrap(), 0);
         // todo assert_eq 3 oder 4 inklusive cn=Users?
@@ -568,8 +621,8 @@ mod test {
         let _ = env_logger::try_init();
 
         let ts_store_name = "ldap1".to_string();
-        let ts_store_plain_port = 16389;
-        let ts_store_tls_port = 16636;
+        let ts_store_plain_port = 20389;
+        let ts_store_tls_port = 20636;
         let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
         let ts_store_bind_dn = "cn=admin,dc=test".to_string();
         let ts_store_password = "secret".to_string();
@@ -620,12 +673,12 @@ mod test {
             base_dn: ts_store_base_dn.clone(),
         };
 
-        let ldap_services_map = HashMap::from( [(ts_store_name.clone(), ts_store_service)]);
+        let ldap_services_map = HashMap::from([(ts_store_name.clone(), ts_store_service)]);
 
         let sync_config = SynchronisationConfig {
             source: "provider".to_string(),
             target: "consumer".to_string(),
-            base_dns: vec![ "cn=unused".to_string() ],
+            base_dns: vec!["cn=unused".to_string()],
             ts_store: ts_store_name.clone(),
             /// ts_base_dn is relative to the base_dn of the LdapService
             ts_dn: "o=provider-consumer,o=sync_timestamps".to_string(),
@@ -635,7 +688,7 @@ mod test {
             ldap_services: &ldap_services_map,
             sync_config: &sync_config,
             dry_run: true,
-            exclude_attrs: &Regex::new("").unwrap()
+            exclude_attrs: &Regex::new("").unwrap(),
         };
 
         let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();
@@ -643,20 +696,22 @@ mod test {
         let mut ts_store_ldap = simple_connect(service_to_use).await.unwrap();
 
         debug!("ts_store_ldap: {:?}", ts_store_ldap);
-        let result = synchronisation.load_sync_timestamp(&mut ts_store_ldap).await.unwrap();
+        let result = synchronisation
+            .load_sync_timestamp(&mut ts_store_ldap)
+            .await
+            .unwrap();
 
         assert_eq!(result, "20231025235959Z");
-
     }
 
     #[tokio::test]
     async fn test_save_sync_timestamp() {
         let _ = env_logger::try_init();
 
-        let sync_timestamp ="20231025235959Z";
+        let sync_timestamp = "20231025235959Z";
         let ts_store_name = "ldap1".to_string();
-        let ts_store_plain_port = 16389;
-        let ts_store_tls_port = 16636;
+        let ts_store_plain_port = 19389;
+        let ts_store_tls_port = 19636;
         let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
         let ts_store_bind_dn = "cn=admin,dc=test".to_string();
         let ts_store_password = "secret".to_string();
@@ -707,12 +762,12 @@ mod test {
             base_dn: ts_store_base_dn.clone(),
         };
 
-        let ldap_services_map = HashMap::from( [(ts_store_name.clone(), ts_store_service)]);
+        let ldap_services_map = HashMap::from([(ts_store_name.clone(), ts_store_service)]);
 
         let sync_config = SynchronisationConfig {
             source: "provider".to_string(),
             target: "consumer".to_string(),
-            base_dns: vec![ "cn=unused".to_string() ],
+            base_dns: vec!["cn=unused".to_string()],
             ts_store: ts_store_name.clone(),
             /// ts_base_dn is relative to the base_dn of the LdapService
             ts_dn: "o=provider-consumer,o=sync_timestamps".to_string(),
@@ -722,7 +777,7 @@ mod test {
             ldap_services: &ldap_services_map,
             sync_config: &sync_config,
             dry_run: false,
-            exclude_attrs: &Regex::new("").unwrap()
+            exclude_attrs: &Regex::new("").unwrap(),
         };
 
         let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();
@@ -730,11 +785,10 @@ mod test {
         let mut ts_store_ldap = simple_connect(service_to_use).await.unwrap();
 
         debug!("ts_store_ldap: {:?}", ts_store_ldap);
-        let result = synchronisation.save_sync_timestamp(&mut ts_store_ldap, sync_timestamp).await;
+        let result = synchronisation
+            .save_sync_timestamp(&mut ts_store_ldap, sync_timestamp)
+            .await;
         debug!("result: {:?}", result);
         assert!(result.is_ok());
-
     }
-
-
 }

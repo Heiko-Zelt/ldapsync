@@ -1,6 +1,7 @@
 use ldap3::{Ldap, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry, Mod};
 use std::collections::{HashSet, HashMap};
 use log::{debug, info};
+use regex::Regex;
 
 use crate::sub::cf_services::LdapService;
 
@@ -128,6 +129,34 @@ pub async fn search_one_entry_by_dn(
     }
 }
 
+/// The attributes list could be very long.
+/// So it's more convinient to search for all non-operative attributes '*' and remove unwanted attributes.
+/// Additionally attribute names are converted to lower case,
+/// because Oracle Interne Directory returns attribute namen in lower case
+/// and OpenLdap may return attributes in camel case.
+pub async fn search_one_entry_by_dn_attrs_filtered(
+    ldap_conn: &mut Ldap,
+    dn: &str,
+    exclude_attrs: &Regex
+) -> Result<Option<SearchEntry>, LdapError> {
+    let result_entry = search_one_entry_by_dn(ldap_conn, dn).await?;
+    match result_entry {
+        Some(mut entry) => {
+            let filtered_attrs = entry.attrs
+                .into_iter()
+                .filter(|(key, _)| {
+                    !exclude_attrs.is_match(key)
+                })
+                .map(|(key, value)| {
+                    (key.to_lowercase(), value)
+                })
+                .collect();
+            entry.attrs = filtered_attrs;
+            Ok(Some(entry))
+        },
+        None => Ok(None)
+    }
+}
 
 pub fn diff_attributes(source_attrs: &HashMap<String, Vec<String>>, target_attrs: &HashMap<String, Vec<String>>) -> Vec<Mod<String>> {
     let source_set: HashSet<String> = source_attrs.keys().cloned().collect();
@@ -331,6 +360,78 @@ pub mod test {
 
     }
 
+    #[tokio::test]
+    async fn test_search_one_entry_by_dn_attrs_filtered() {
+        let _ = env_logger::try_init();
+
+        let plain_port = 18389;
+        let tls_port = 18636;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+        
+            dn: cn=xy012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: xy012345
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!"
+        };
+
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+
+        let _server = start_test_server(plain_port, tls_port, &base_dn, content).await;
+
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+        debug!("ldap conn: {:?}", ldap_conn);
+
+        let some_ex = Regex::new("^(?i)(givenNAME|UserPassword)$").unwrap();
+        let some_dn = "cn=xy012345,ou=Users,dc=test";
+        let some_result = search_one_entry_by_dn_attrs_filtered(
+            &mut ldap_conn,
+            some_dn,
+            &some_ex
+        ).await.unwrap();
+        assert!(some_result.is_some());
+        let attrs = some_result.unwrap().attrs;
+        debug!("attrs: {:?}", attrs);
+        assert_eq!(attrs.len(), 3);
+        assert!(attrs.contains_key("objectclass"));
+        assert!(attrs.contains_key("cn"));
+        assert!(attrs.contains_key("sn"));
+
+        let none_ex = Regex::new("^sn$").unwrap();
+        let none_dn = "cn=ab012345,ou=Users,dc=test";
+        let none_result = search_one_entry_by_dn_attrs_filtered(
+            &mut ldap_conn,
+            none_dn,
+            &none_ex
+        ).await.unwrap();
+        assert!(none_result.is_none());
+
+    }
 
     #[tokio::test]
     async fn test_2_servers() {
