@@ -2,7 +2,7 @@ pub mod sub;
 
 use chrono::{Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConn, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry};
-use log::{debug, info};
+use log::{debug, info, error};
 use tokio::time::sleep;
 use std::{env, time::Duration, path::Path};
 use std::collections::{HashSet, HashMap};
@@ -39,6 +39,8 @@ async fn main() {
             Synchronisation {
                 ldap_services: &app_config.ldap_services,
                 sync_config: sync_config,
+                dry_run: app_config.dry_run,
+                exclude_attrs: &app_config.exclude_attrs
             }
         )
         .collect();
@@ -48,9 +50,13 @@ async fn main() {
     loop {
         info!("Start synchronisations.");
         for synchro in synchronisations.iter() {
-            synchro.synchronize(app_config.dry_run).await.unwrap();
+            let result = synchro.synchronize().await;
+            match result {
+                Ok(n) => info!("Synchronization was successfull. Number of entries synchronized: {}", n),
+                Err(e) => error!("Synchronization failed. {:?}", e)
+            }
         }
-        info!("All synchronisations finished. Sleep for {:?}.", app_config.job_sleep);
+        info!("Sleep for {:?}.", app_config.job_sleep);
         sleep(app_config.job_sleep).await;
     }
     

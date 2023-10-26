@@ -2,6 +2,7 @@ use chrono::{Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapError, Scope, SearchEntry, Mod, LdapResult};
 use log::{debug, info};
 use std::collections::{HashMap, HashSet};
+use regex::Regex;
 
 use crate::sub::cf_services::LdapService;
 use crate::sub::ldap_utils::*;
@@ -18,7 +19,9 @@ pub const SYNC_TIMESTAMP_ATTR_NAME: &str = "name";
 pub struct Synchronisation<'a> {
     /// map: name -> LdapService
     pub ldap_services: &'a HashMap<String, LdapService>,
-    pub sync_config: &'a SynchronisationConfig
+    pub sync_config: &'a SynchronisationConfig,
+    pub exclude_attrs: &'a Regex,
+    pub dry_run: bool
 }
 
 impl<'a> Synchronisation<'a> {
@@ -42,7 +45,7 @@ impl<'a> Synchronisation<'a> {
     /// - for every DN: sync_delete() & sync_modify()
     /// - disconnects
     /// returns: number of touched (added, modified and delted) entries)
-    pub async fn synchronize(&self, dry_run: bool) -> Result<usize, LdapError> {
+    pub async fn synchronize(&self) -> Result<usize, LdapError> {
         let source_service = self.ldap_services.get(&self.sync_config.source).unwrap();
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
@@ -70,7 +73,8 @@ impl<'a> Synchronisation<'a> {
                 &mut target_ldap,
                 &source_service.base_dn,
                 &target_service.base_dn,
-                dn, dry_run
+                dn,
+                self.dry_run
             ).await?;
             Self::sync_modify(
                 &mut source_ldap,
@@ -79,7 +83,7 @@ impl<'a> Synchronisation<'a> {
                 &target_service.base_dn,
                 &dn,
                 &old_sync_timestamp,
-                 dry_run
+                 self.dry_run
             ).await?;
         }
 
@@ -630,6 +634,8 @@ mod test {
         let synchronisation = Synchronisation {
             ldap_services: &ldap_services_map,
             sync_config: &sync_config,
+            dry_run: true,
+            exclude_attrs: &Regex::new("").unwrap()
         };
 
         let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();
@@ -715,6 +721,8 @@ mod test {
         let synchronisation = Synchronisation {
             ldap_services: &ldap_services_map,
             sync_config: &sync_config,
+            dry_run: false,
+            exclude_attrs: &Regex::new("").unwrap()
         };
 
         let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();

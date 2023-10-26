@@ -12,6 +12,7 @@ use crate::sub::cf_services::{get_ldap_services_by_names, LdapService};
 pub struct AppConfig {
     pub job_sleep: Duration,
     pub dry_run: bool,
+    pub exclude_attrs: Regex,
     pub ldap_services: HashMap<String, LdapService>,
     pub synchronisation_configs: Vec<SynchronisationConfig>, // todo change to syncronisations (with refs)
 }
@@ -38,6 +39,7 @@ impl AppConfig {
         debug!("JOB_SLEEP: {}", job_sleep_str);
         let dry_run_str = env::var("DRY_RUN").unwrap();
         debug!("DRY_RUN: {}", dry_run_str);
+        let exclude_attrs_pattern = env::var("EXCLUDE_ATTRS").unwrap();
 
         debug!("VCAP_SERVICES: {:?}", env::var("VCAP_SERVICES"));
         let ldap_services_map = get_ldap_services_by_names().unwrap();
@@ -55,6 +57,7 @@ impl AppConfig {
         let config = AppConfig {
             job_sleep: Self::parse_duration(&job_sleep_str),
             dry_run: bool::from_str(&dry_run_str).unwrap(),
+            exclude_attrs: Regex::new(&exclude_attrs_pattern).unwrap(),
             ldap_services: ldap_services_map,
             synchronisation_configs: synchronisations_vec,
         };
@@ -68,10 +71,12 @@ mod test {
     use indoc::*;
     use rstest::*;
 
+    // todo write unit tests with errors in configuration. Are error messages user friendly?
     #[test]
     fn test_from_cf_env() {
         env::set_var("JOB_SLEEP", "10 sec");
         env::set_var("DRY_RUN", "true");
+        env::set_var("EXCLUDE_ATTRS", "^(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
         env::set_var(
             "VCAP_SERVICES",
             indoc! {r#"{

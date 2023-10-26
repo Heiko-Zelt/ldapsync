@@ -104,6 +104,29 @@ pub async fn search_norm_dns(
     Ok(norm_dns)
 }
 
+/// returns exactly one entry if found or None if not not found
+pub async fn search_one_entry_by_dn(
+    ldap_conn: &mut Ldap,
+    dn: &str,
+) -> Result<Option<SearchEntry>, LdapError> {
+    let search_result = ldap_conn
+        .search(dn, Scope::Base, "(objectClass=*)", vec!["*"])
+        .await?;
+    let result_entries = search_result.0;
+    info!("number of entries: {}", result_entries.len()); // should be 0 or 1
+    match result_entries.len() {
+        0 => {
+            Ok(None)
+        }
+        1 => {
+            let search_entry = SearchEntry::construct(result_entries[0].clone());
+            Ok(Some(search_entry))
+        },
+        _ => {
+            panic!("Found more than 1 entry.")
+        }
+    }
+}
 
 
 pub fn diff_attributes(source_attrs: &HashMap<String, Vec<String>>, target_attrs: &HashMap<String, Vec<String>>) -> Vec<Mod<String>> {
@@ -250,6 +273,64 @@ pub mod test {
         let ldap_conn = simple_connect(&service).await;
         debug!("ldap conn: {:?}", ldap_conn);
     }
+
+
+    #[tokio::test]
+    async fn test_search_one_entry_by_dn() {
+        let _ = env_logger::try_init();
+
+        let plain_port = 17389;
+        let tls_port = 17636;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+        
+            dn: cn=xy012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!"
+        };
+
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+
+        let _server = start_test_server(plain_port, tls_port, &base_dn, content).await;
+
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+        debug!("ldap conn: {:?}", ldap_conn);
+
+        let some_dn = "cn=xy012345,ou=Users,dc=test";
+        let some_result = search_one_entry_by_dn(&mut ldap_conn, some_dn).await.unwrap();
+        assert!(some_result.is_some());
+
+        let none_dn = "cn=ab012345,ou=Users,dc=test";
+        let none_result = search_one_entry_by_dn(&mut ldap_conn, none_dn).await.unwrap();
+        assert!(none_result.is_none());
+
+    }
+
 
     #[tokio::test]
     async fn test_2_servers() {
