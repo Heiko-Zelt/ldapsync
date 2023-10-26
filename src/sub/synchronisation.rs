@@ -84,6 +84,7 @@ impl<'a> Synchronisation<'a> {
                 &target_service.base_dn,
                 &dn,
                 &old_sync_timestamp,
+                self.exclude_attrs,
                 self.dry_run,
             )
             .await?;
@@ -221,6 +222,7 @@ impl<'a> Synchronisation<'a> {
         target_base_dn: &str,
         sync_dn: &str,
         old_modify_timestamp: &str,
+        exclude_attrs: &Regex,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
         info!(
@@ -229,76 +231,74 @@ impl<'a> Synchronisation<'a> {
         );
 
         // im Quell-LDAP alle geänderten Einträge suchen
-        let filter = format!("(modifyTimestamp>={})", old_modify_timestamp);
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
-        debug!("search with base: {}, filter: {}", source_sync_dn, filter);
-        let source_search_result = source_ldap
-            .search(&source_sync_dn, Scope::Subtree, &filter, vec!["*"])
+
+        let source_search_entries = search_modified_entries_attrs_filtered(
+            source_ldap,
+            &source_sync_dn,
+            old_modify_timestamp,
+            exclude_attrs,
+        )
+        .await?;
+
+        info!(
+            "number of recently modified entries: {}",
+            source_search_entries.len()
+        );
+
+        let source_base_dn_len = source_base_dn.len();
+        for source_search_entry in source_search_entries {
+            let _modified = Self::sync_modify_one_entry(
+                target_ldap,
+                source_base_dn_len,
+                target_base_dn,
+                source_search_entry,
+                exclude_attrs,
+                dry_run,
+            )
             .await?;
-        debug!("finished search");
-
-        // todo filter excluded_attributes
-        // todo sort desc attr name
-
-        let source_ldap_result = source_search_result.1;
-        info!("LDAP result code: {}", source_ldap_result.rc);
-        if source_ldap_result.rc == 0 {
-            // Is result code ok?
-            let source_result_entries = source_search_result.0;
-            // Attribute im Ziel-LDAP ersetzen oder Eintrag neu anlegen
-            info!("number of entries: {}", source_result_entries.len());
-
-            let source_base_dn_len = source_base_dn.len();
-            for source_result_entry in source_result_entries {
-                let source_search_entry = SearchEntry::construct(source_result_entry);
-                sync_modify_one_entry(
-                    target_ldap,
-                    source_base_dn_len,
-                    target_base_dn,
-                    source_search_entry,
-                    dry_run,
-                ).await?;
-            }
         }
         // todo korrekte Anzahl zurückgeben
         Ok(0)
     }
-}
 
-/// todo implement dry_run
-/// returns true if entry was modified or false if added
-pub async fn sync_modify_one_entry(
-    target_ldap: &mut Ldap,
-    source_base_dn_len: usize,
-    target_base_dn: &str,
-    source_search_entry: SearchEntry,
-    _dry_run: bool,
-) -> Result<bool, LdapError> {
-    debug!("source entry: {:?}", source_search_entry);
+    /// todo implement dry_run
+    /// returns true if entry was modified or false if added
+    pub async fn sync_modify_one_entry(
+        target_ldap: &mut Ldap,
+        source_base_dn_len: usize,
+        target_base_dn: &str,
+        source_search_entry: SearchEntry,
+        exclude_attrs: &Regex,
+        _dry_run: bool,
+    ) -> Result<bool, LdapError> {
+        debug!("source entry: {:?}", source_search_entry);
 
-    let mut trunc_dn = source_search_entry.dn.clone();
-    truncate_dn(&mut trunc_dn, source_base_dn_len);
-    let target_dn = join_2_dns(&trunc_dn, target_base_dn);
-    let target_search_entry = search_one_entry_by_dn(target_ldap, &target_dn).await?;
-    match target_search_entry {
-        Some(entry) => {
-            let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
-            target_ldap.modify(&target_dn, mods).await?;
-            Ok(true)
-        }
-        None => {
-            // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
-            let target_attrs = source_search_entry
-                .attrs
-                .iter()
-                .map(|(attr_name, attr_values)| {
-                    let a: String = attr_name.clone();
-                    let vs: HashSet<String> = HashSet::from_iter(attr_values.iter().cloned());
-                    (a, vs)
-                })
-                .collect::<Vec<(String, HashSet<String>)>>();
-            target_ldap.add(&target_dn, target_attrs).await?;
-            Ok(false)
+        let mut trunc_dn = source_search_entry.dn.clone();
+        truncate_dn(&mut trunc_dn, source_base_dn_len);
+        let target_dn = join_2_dns(&trunc_dn, target_base_dn);
+        let target_search_entry =
+            search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await?;
+        match target_search_entry {
+            Some(entry) => {
+                let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
+                target_ldap.modify(&target_dn, mods).await?;
+                Ok(true)
+            }
+            None => {
+                // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
+                let target_attrs = source_search_entry
+                    .attrs
+                    .iter()
+                    .map(|(attr_name, attr_values)| {
+                        let a: String = attr_name.clone();
+                        let vs: HashSet<String> = HashSet::from_iter(attr_values.iter().cloned());
+                        (a, vs)
+                    })
+                    .collect::<Vec<(String, HashSet<String>)>>();
+                target_ldap.add(&target_dn, target_attrs).await?;
+                Ok(false)
+            }
         }
     }
 }
@@ -481,6 +481,7 @@ mod test {
             &target_base_dn,
             "ou=Users",
             old_modify_timestamp,
+            &Regex::new("^givenname$").unwrap(),
             true,
         )
         .await;

@@ -129,6 +129,36 @@ pub async fn search_one_entry_by_dn(
     }
 }
 
+/// converts all attribute names to lower case
+/// and filters the attributes by name
+pub fn filter_attrs(attrs: &HashMap<String, Vec<String>>, exclude_attrs: &Regex) -> HashMap<String, Vec<String>> {
+    attrs.iter()
+    .map(|(key, value)| {
+        (key.to_lowercase(), value.clone())
+    })
+    .filter(|(key, _)| {
+        !exclude_attrs.is_match(key)
+    })
+    .collect()
+}
+
+/*
+neuer Vec, da keys sich ändern
+aber die values könnten den Eigentümer wechseln. entnehmen?
+pub fn filter_attrs_inplace() {
+    let filtered_attrs = entry.attrs
+        .into_iter()
+        .map(|(key, value)| {
+            (key.to_lowercase(), value)
+        })
+        .filter(|(key, _)| {
+            !exclude_attrs.is_match(key)
+        })
+        .collect();
+    entry.attrs = filtered_attrs;
+}
+*/
+
 /// The attributes list could be very long.
 /// So it's more convinient to search for all non-operative attributes '*' and remove unwanted attributes.
 /// Additionally attribute names are converted to lower case,
@@ -139,23 +169,45 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
     dn: &str,
     exclude_attrs: &Regex
 ) -> Result<Option<SearchEntry>, LdapError> {
-    let result_entry = search_one_entry_by_dn(ldap_conn, dn).await?;
-    match result_entry {
+    let search_entry = search_one_entry_by_dn(ldap_conn, dn).await?;
+    match search_entry {
         Some(mut entry) => {
-            let filtered_attrs = entry.attrs
-                .into_iter()
-                .filter(|(key, _)| {
-                    !exclude_attrs.is_match(key)
-                })
-                .map(|(key, value)| {
-                    (key.to_lowercase(), value)
-                })
-                .collect();
-            entry.attrs = filtered_attrs;
+            entry.attrs = filter_attrs(&entry.attrs, exclude_attrs);
             Ok(Some(entry))
         },
         None => Ok(None)
     }
+}
+
+/// Searches a subtree for recently modified entries.
+/// Attribute names are normalized to lowercase
+/// and attributes are filtered.
+pub async fn search_modified_entries_attrs_filtered(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    old_modify_timestamp: &str,
+    exclude_attrs: &Regex
+) -> Result<Vec<SearchEntry>,LdapError> {
+    let filter = format!("(modifyTimestamp>={})", old_modify_timestamp);
+    debug!("search with base: {}, filter: {}", base_dn, filter);
+    let mut search_result_stream = ldap
+        .streaming_search(&base_dn, Scope::Subtree, &filter, vec!["*"])
+        .await?;
+    let mut search_entries: Vec<SearchEntry> = Vec::new();
+    loop {
+        let result_entry = search_result_stream.next().await?;
+        match result_entry {
+            Some(entry) => {
+                let mut search_entry = SearchEntry::construct(entry.clone());
+                search_entry.attrs = filter_attrs(&mut search_entry.attrs, exclude_attrs);
+                search_entries.push(search_entry);
+            }
+            None => {
+                break;
+            }
+        }
+    }
+    Ok(search_entries)
 }
 
 pub fn diff_attributes(source_attrs: &HashMap<String, Vec<String>>, target_attrs: &HashMap<String, Vec<String>>) -> Vec<Mod<String>> {
@@ -431,6 +483,80 @@ pub mod test {
         ).await.unwrap();
         assert!(none_result.is_none());
 
+    }
+
+
+    #[tokio::test]
+    async fn test_search_modified_entries_attrs_filtered() {
+        let _ = env_logger::try_init();
+
+        let plain_port = 21389;
+        let tls_port = 21636;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 19750101235958Z
+        
+            dn: cn=old012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: old012345
+            sn: Müller
+            modifyTimestamp: 19750101235959Z
+            
+            dn: cn=new012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: new012345
+            sn: Habibullah
+            givenName: Amira
+            userPassword: welt123!
+            modifyTimestamp: 20220101235959Z"
+        };
+
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+
+        let _server = start_test_server(plain_port, tls_port, &base_dn, content).await;
+
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+        debug!("ldap conn: {:?}", ldap_conn);
+
+        let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
+        
+        let search_entries = search_modified_entries_attrs_filtered(
+            &mut ldap_conn,
+            "ou=Users,dc=test",
+            "20201231235959Z",
+            &ex
+        ).await.unwrap();
+        
+        assert_eq!(search_entries.len(), 1);
+        let attrs = &search_entries[0].attrs;
+        debug!("attrs: {:?}", attrs);
+        assert_eq!(attrs.len(), 3);
+        assert!(attrs.contains_key("objectclass"));
+        assert!(attrs.contains_key("givenname"));
+        assert!(attrs.contains_key("userpassword"));
     }
 
     #[tokio::test]
