@@ -565,7 +565,6 @@ dependencies = [
  "ldap-test-server",
  "ldap3",
  "log",
- "pickledb",
  "regex",
  "rstest",
  "serde",
@@ -785,16 +784,6 @@ name = "percent-encoding"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b2a4787296e9989611394c33f193f676704af1686e70b8f8033ab5ba9a35a94"
-
-[[package]]
-name = "pickledb"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c53a5ade47760e8cc4986bdc5e72daeffaaaee64cbc374f9cfe0a00c1cd87b1f"
-dependencies = [
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "pin-project-lite"

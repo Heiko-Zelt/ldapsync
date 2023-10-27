@@ -8,7 +8,6 @@ edition = "2021"
 ldap3 = "0.11"
 log = "0.4"
 env_logger = "0.10"
-pickledb = "0.5"
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
 regex = "1.10"
