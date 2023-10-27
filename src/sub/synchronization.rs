@@ -199,8 +199,10 @@ impl<'a> Synchronization<'a> {
             let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn).await?;
             let garbage_diff = target_norm_dns.difference(&source_norm_dns);
             let mut garbage_vec: Vec<&String> = garbage_diff.collect();
-            // längste DNs zuerst
+
+            // Von den Blättern zur Wurzel, längere DNs zuerst sortieren. Absteigend nach Länge der DNs.
             garbage_vec.sort_by(|a, b| b.len().cmp(&a.len()));
+
             for dn in garbage_vec.iter() {
                 // norm_dn ends with a comma if it is not empty
                 //let target_dn = format!("{}{}", norm_dn, target.base_dn);
@@ -252,16 +254,19 @@ impl<'a> Synchronization<'a> {
 
         let mut modi_statistics = ModiStatistics { added: 0, modified: 0 };
 
-        // im Quell-LDAP alle geänderten Einträge suchen
+        // im Quell-LDAP alle neulich geänderten Einträge suchen
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
 
-        let source_search_entries = search_modified_entries_attrs_filtered(
+        let mut source_search_entries = search_modified_entries_attrs_filtered(
             source_ldap,
             &source_sync_dn,
             old_modify_timestamp,
             exclude_attrs,
         )
         .await?;
+
+        // Von der Wurzel zu den Blättern, kürzere DNs zuerst sortieren. Austeigend nach Länger der DNs.
+        source_search_entries.sort_by(|a, b| a.dn.len().cmp(&b.dn.len()));
 
         info!(
             "number of recently modified entries: {}",

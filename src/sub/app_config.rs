@@ -2,9 +2,10 @@ use log::{debug, error, info};
 use regex::Regex;
 use std::{collections::HashMap, env, env::VarError, str::FromStr, time::Duration};
 
-use crate::sub::cf_services::{map_ldap_services, parse_ldap_services, LdapService};
+use crate::sub::cf_services::{map_ldap_services, parse_service_types, LdapService};
 use crate::sub::synchronization_config::SynchronizationConfig;
 
+/// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
 pub const SYNCHRONIZATIONS: &str = "SYNCHRONIZATIONS";
 pub const EXCLUDE_ATTRS: &str = "EXCLUDE_ATTRS";
@@ -40,7 +41,7 @@ pub enum AppConfigError {
         synchronisation_index: usize,
         usage: LdapServiceUsage,
     },
-    UserProvidedCfServicesMissing,
+    LdapServiceNameNotUnique
 }
 
 #[derive(Debug)]
@@ -54,7 +55,6 @@ pub struct AppConfig {
 
 impl AppConfig {
     /// example input "15 min" or "10 sec"
-    /// todo error handling, return Result
     pub fn parse_duration(hay: &str) -> Option<Duration> {
         let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap(); // assumption: works always or never
         let captures = re.captures(hay)?;
@@ -92,14 +92,14 @@ impl AppConfig {
                 cause: err,
             })?;
         debug!("VCAP_SERVICES: {:?}", vcap_services_str);
-        let vcap_services_map = parse_ldap_services(&vcap_services_str).map_err(|err| {
+        let vcap_service_types = parse_service_types(&vcap_services_str).map_err(|err| {
             AppConfigError::EnvVarParseJsonError {
                 env_var_name: SYNCHRONIZATIONS.to_string(),
                 cause: err,
             }
         })?;
-        let ldap_services_map = map_ldap_services(&vcap_services_map)
-            .ok_or(AppConfigError::UserProvidedCfServicesMissing)?;
+        let ldap_services_map = map_ldap_services(&vcap_service_types.user_provided)
+            .map_err(|_| AppConfigError::LdapServiceNameNotUnique)?;
         debug!("ldap services by names: {:?}", ldap_services_map);
 
         for (index, sync_config) in synchronizations_vec.iter().enumerate() {
@@ -158,8 +158,6 @@ impl AppConfig {
             bool::from_str(&dry_run_str).map_err(|_| AppConfigError::EnvVarParseError {
                 env_var_name: DRY_RUN.to_string(),
             })?;
-
-        // todo parse error handling services & synchronsations
 
         let config = AppConfig {
             job_sleep: job_sleep_duration,
