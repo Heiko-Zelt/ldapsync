@@ -1,8 +1,6 @@
 use log::{debug, error, info};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::{env, str::FromStr, time::Duration};
+use std::{env, str::FromStr, time::Duration, collections::HashMap};
 
 use crate::sub::synchronization_config::SynchronizationConfig;
 use crate::sub::cf_services::{get_ldap_services_by_names, LdapService};

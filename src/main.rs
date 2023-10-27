@@ -1,17 +1,10 @@
 pub mod sub;
 
-use chrono::{Datelike, Timelike, Utc};
-use ldap3::{Ldap, LdapConn, LdapConnAsync, LdapError, ResultEntry, Scope, SearchEntry};
 use log::{debug, info, error};
 use tokio::time::sleep;
-use std::{env, time::Duration, path::Path};
-use std::collections::{HashSet, HashMap};
 
 use crate::sub::app_config::AppConfig;
 use crate::sub::synchronization::Synchronization;
-use crate::sub::cf_services::LdapService;
-
-
 
 /// main function.
 /// reads configuration from environment variables

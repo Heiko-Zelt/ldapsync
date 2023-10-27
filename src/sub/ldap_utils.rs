@@ -249,7 +249,6 @@ pub mod test {
     use super::*;
     use indoc::*;
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
-    use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
     use rstest::rstest;
 
     //use futures::executor::block_on;
