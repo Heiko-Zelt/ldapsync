@@ -28,13 +28,12 @@ pub fn join_3_dns(periphery_dn: &str, middle_dn: &str, base_dn: &str) -> String 
     join_2_dns(&join_2_dns(periphery_dn, middle_dn), base_dn)
 }
 
-/// Truncates the base DN from DN
+/// Truncates the base DN from DN in place
 /// dn: ""                , base_dn: ""        -> ""
 /// dn: "dc=test"         , base_dn: ""        -> "dc=test"
 /// dn: "dc=test"         , base_dn: "dc=test" -> ""
 /// dn: "cn=Users,dc=test", base_dn: "dc=test" -> "cn=Users" Normalfall
 pub fn truncate_dn(dn: &mut String, base_dn_len: usize) {
-    print!("dn: {}, base_dn_len: {}", dn, base_dn_len);
     if base_dn_len == 0 {
         // nichts abscheiden
         return;
@@ -84,6 +83,7 @@ pub fn result_entries_to_norm_dns(result_entries: &Vec<ResultEntry>, base_dn: &s
     norm_dns
 }
 
+/// todo Error, wenn base_dn gar nicht existiert
 pub async fn search_norm_dns(
     ldap_conn: &mut Ldap,
     base_dn: &str,
@@ -182,6 +182,7 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
 /// Searches a subtree for recently modified entries.
 /// Attribute names are normalized to lowercase
 /// and attributes are filtered.
+/// todo Error, wenn base_dn gar nicht existiert
 pub async fn search_modified_entries_attrs_filtered(
     ldap: &mut Ldap,
     base_dn: &str,

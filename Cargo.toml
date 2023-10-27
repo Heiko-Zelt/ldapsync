@@ -22,6 +22,3 @@ rstest = "0.18"
 
 # "sudo apt install slapd" because OpenLDAP server is needed
 ldap-test-server = "0.0"
-#async-std = { version = "1", features = ["attributes", "tokio1"] }
-#futures = "0.3"
-#futures = "0.2"

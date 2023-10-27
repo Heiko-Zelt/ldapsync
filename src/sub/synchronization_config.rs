@@ -1,17 +1,17 @@
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SynchronisationConfig {
+pub struct SynchronizationConfig {
     pub source: String,
     pub target: String,
     pub base_dns: Vec<String>,
     pub ts_store: String,
-    /// ts_base_dn is relative to the base_dn of the LdapService
+    /// ts_dn is relative to the base_dn of the LdapService
     pub ts_dn: String,
 }
 
-impl SynchronisationConfig {
-    pub fn parse_synchronisations(json_vec: &str) -> Vec<SynchronisationConfig> {
+impl SynchronizationConfig {
+    pub fn parse_synchronizations(json_vec: &str) -> Vec<SynchronizationConfig> {
         serde_json::from_str(json_vec).unwrap()
     }
 }
@@ -23,34 +23,34 @@ mod test {
 
     #[test]
     fn test_serialize1() {
-        let sync_with_names = SynchronisationConfig {
+        let sync_config = SynchronizationConfig {
             source: "hub1".to_string(),
             target: "ldap1".to_string(),
             base_dns: vec![ "cn=org2".to_string(), "cn=org3".to_string(), "cn=org4".to_string() ],
             ts_store: "hub1".to_string(),
             ts_dn: "o=hub1-ldap1,o=sync_timestamps".to_string(),
         };
-        let result = serde_json::to_string(&sync_with_names).unwrap();
+        let result = serde_json::to_string(&sync_config).unwrap();
         assert_eq!(result, r#"{"source":"hub1","target":"ldap1","base_dns":["cn=org2","cn=org3","cn=org4"],"ts_store":"hub1","ts_dn":"o=hub1-ldap1,o=sync_timestamps"}"#);
     }
 
     #[test]
     fn test_serialize2() {
-        let sync_with_names = vec![SynchronisationConfig {
+        let sync_config = vec![SynchronizationConfig {
             source: "ldap1".to_string(),
             target: "ldap2".to_string(),
             base_dns: vec![ "cn=users".to_string(), "cn=groups".to_string() ],
             ts_store: "ldap2".to_string(),
             ts_dn: "o=ldap1-ldap2,o=sync_timestamps".to_string(),
         }];
-        let result = serde_json::to_string(&sync_with_names).unwrap();
+        let result = serde_json::to_string(&sync_config).unwrap();
         assert_eq!(result, r#"[{"source":"ldap1","target":"ldap2","base_dns":["cn=users","cn=groups"],"ts_store":"ldap2","ts_dn":"o=ldap1-ldap2,o=sync_timestamps"}]"#);
     }
  
     #[test]
     fn test_parse_synchronisations() {
         let json_str = r#"[{ "source": "ldap1", "target": "ldap2", "base_dns": [ "cn=users", "cn=groups" ], "ts_store": "ldap2", "ts_dn": "o=ldap1-ldap2,o=sync_timestamps" }]"#;
-        let sync_configs = SynchronisationConfig::parse_synchronisations(json_str);
+        let sync_configs = SynchronizationConfig::parse_synchronizations(json_str);
         assert_eq!(sync_configs.len(), 1);
         let first = &sync_configs[0];
         assert_eq!(first.source, "ldap1");

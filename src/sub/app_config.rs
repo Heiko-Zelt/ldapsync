@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::{env, str::FromStr, time::Duration};
 
-use crate::sub::synchronisation_config::SynchronisationConfig;
+use crate::sub::synchronization_config::SynchronizationConfig;
 use crate::sub::cf_services::{get_ldap_services_by_names, LdapService};
 
 
@@ -14,7 +14,7 @@ pub struct AppConfig {
     pub dry_run: bool,
     pub exclude_attrs: Regex,
     pub ldap_services: HashMap<String, LdapService>,
-    pub synchronisation_configs: Vec<SynchronisationConfig>, // todo change to syncronisations (with refs)
+    pub synchronization_configs: Vec<SynchronizationConfig>,
 }
 
 impl AppConfig {
@@ -45,13 +45,13 @@ impl AppConfig {
         let ldap_services_map = get_ldap_services_by_names().unwrap();
         debug!("ldap services by names: {:?}", ldap_services_map);
         
-        let synchronisations_json = env::var("SYNCHRONISATIONS").unwrap();
-        debug!("SYNCHRONISATIONS: {}", synchronisations_json);
+        let synchronizations_json = env::var("SYNCHRONIZATIONS").unwrap();
+        debug!("SYNCHRONIZATIONS: {}", synchronizations_json);
 
         //let synchronisations_vec = Vec::new();
 
-        let synchronisations_vec =
-            SynchronisationConfig::parse_synchronisations(&synchronisations_json);
+        let synchronizations_vec =
+            SynchronizationConfig::parse_synchronizations(&synchronizations_json);
         // todo parse services & synchronsations
 
         let config = AppConfig {
@@ -59,7 +59,7 @@ impl AppConfig {
             dry_run: bool::from_str(&dry_run_str).unwrap(),
             exclude_attrs: Regex::new(&exclude_attrs_pattern).unwrap(),
             ldap_services: ldap_services_map,
-            synchronisation_configs: synchronisations_vec,
+            synchronization_configs: synchronizations_vec,
         };
         config
     }
@@ -76,7 +76,7 @@ mod test {
     fn test_from_cf_env() {
         env::set_var("JOB_SLEEP", "10 sec");
         env::set_var("DRY_RUN", "true");
-        env::set_var("EXCLUDE_ATTRS", "^(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
+        env::set_var("EXCLUDE_ATTRS", "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
         env::set_var(
             "VCAP_SERVICES",
             indoc! {r#"{
@@ -103,7 +103,7 @@ mod test {
         }"#},
         );
         env::set_var(
-            "SYNCHRONISATIONS",
+            "SYNCHRONIZATIONS",
             indoc! {r#"
             [{
                 "source":"ldap1",
@@ -117,7 +117,14 @@ mod test {
 
         let app_config = AppConfig::from_cf_env();
         debug!("app_config: {:?}", app_config);
-        //todo assert
+        assert_eq!(app_config.job_sleep, Duration::from_secs(10));
+        assert_eq!(app_config.dry_run, true);
+        assert_eq!(app_config.exclude_attrs.as_str(), "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
+        assert_eq!(app_config.ldap_services.len(), 2);
+        assert!(app_config.ldap_services.contains_key("ldap1"));
+        assert!(app_config.ldap_services.contains_key("ldap2"));
+        assert_eq!(app_config.synchronization_configs.len(), 1);
+        //todo more asserts
     }
 
     #[rstest]

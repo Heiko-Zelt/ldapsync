@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::sub::cf_services::LdapService;
 use crate::sub::ldap_utils::*;
-use crate::sub::synchronisation_config::SynchronisationConfig;
+use crate::sub::synchronization_config::SynchronizationConfig;
 
 /// The object class "extensibleObject" is defined in OpenLdap core schema.
 /// So there is no need to extend the schema with an own object class.
@@ -14,17 +14,32 @@ pub const SYNC_TIMESTAMP_OBJ_CLASS: &str = "extensibleObject";
 pub const SYNC_TIMESTAMP_DN_ATTR_NAME: &str = "cn";
 pub const SYNC_TIMESTAMP_ATTR_NAME: &str = "name";
 
+/// Stores, how many entries have been added, modified and deleted
+/// in the last run.
+#[derive(Debug)]
+pub struct SyncStatistics {
+    pub added: usize,
+    pub modified: usize,
+    pub deleted: usize
+}
+
+#[derive(Debug)]
+pub struct ModiStatistics {
+    pub added: usize,
+    pub modified: usize,
+}
+
 // Referenced source and target LdapServices have to live as long as this struct
 #[derive(Debug)]
-pub struct Synchronisation<'a> {
+pub struct Synchronization<'a> {
     /// map: name -> LdapService
     pub ldap_services: &'a HashMap<String, LdapService>,
-    pub sync_config: &'a SynchronisationConfig,
+    pub sync_config: &'a SynchronizationConfig,
     pub exclude_attrs: &'a Regex,
     pub dry_run: bool,
 }
 
-impl<'a> Synchronisation<'a> {
+impl<'a> Synchronization<'a> {
     /*
     pub fn from_synchronisation_with_names(
         services: &'a HashMap<String, LdapService>,
@@ -45,11 +60,12 @@ impl<'a> Synchronisation<'a> {
     /// - for every DN: sync_delete() & sync_modify()
     /// - disconnects
     /// returns: number of touched (added, modified and delted) entries)
-    pub async fn synchronize(&self) -> Result<usize, LdapError> {
+    pub async fn synchronize(&self) -> Result<SyncStatistics, LdapError> {
         let source_service = self.ldap_services.get(&self.sync_config.source).unwrap();
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
 
+        let mut sync_statistics = SyncStatistics { added: 0, modified: 0, deleted: 0 };
         let mut source_ldap = simple_connect(source_service).await?;
         let mut target_ldap = simple_connect(target_service).await?;
         let mut ts_store_ldap = simple_connect(ts_store_service).await?;
@@ -68,7 +84,7 @@ impl<'a> Synchronisation<'a> {
         );
 
         for dn in self.sync_config.base_dns.iter() {
-            Self::sync_delete(
+            sync_statistics.deleted += Self::sync_delete(
                 &mut source_ldap,
                 &mut target_ldap,
                 &source_service.base_dn,
@@ -77,7 +93,7 @@ impl<'a> Synchronisation<'a> {
                 self.dry_run,
             )
             .await?;
-            Self::sync_modify(
+            let modi_statistics = Self::sync_modify(
                 &mut source_ldap,
                 &mut target_ldap,
                 &source_service.base_dn,
@@ -88,12 +104,16 @@ impl<'a> Synchronisation<'a> {
                 self.dry_run,
             )
             .await?;
+            sync_statistics.added += modi_statistics.added;
+            sync_statistics.modified += modi_statistics.modified;
         }
 
-        self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
-            .await
-            .unwrap();
-        Ok(0)
+        if sync_statistics.added != 0 || sync_statistics.modified != 0 {
+            self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
+                .await
+                .unwrap();
+        }
+        Ok(sync_statistics)
     }
 
     /// return type Option<LdapError> would be good enough
@@ -224,11 +244,13 @@ impl<'a> Synchronisation<'a> {
         old_modify_timestamp: &str,
         exclude_attrs: &Regex,
         dry_run: bool,
-    ) -> Result<usize, LdapError> {
+    ) -> Result<ModiStatistics, LdapError> {
         info!(
             "sync_modify(source_ldap: {:?}, target_ldap: {:?}, old_modify_timestamp: {:?})",
             source_ldap, target_ldap, old_modify_timestamp
         );
+
+        let mut modi_statistics = ModiStatistics { added: 0, modified: 0 };
 
         // im Quell-LDAP alle geänderten Einträge suchen
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
@@ -248,7 +270,7 @@ impl<'a> Synchronisation<'a> {
 
         let source_base_dn_len = source_base_dn.len();
         for source_search_entry in source_search_entries {
-            let _modified = Self::sync_modify_one_entry(
+            let modified = Self::sync_modify_one_entry(
                 target_ldap,
                 source_base_dn_len,
                 target_base_dn,
@@ -257,9 +279,14 @@ impl<'a> Synchronisation<'a> {
                 dry_run,
             )
             .await?;
+            if modified {
+                modi_statistics.modified += 1;
+            } else {
+                modi_statistics.added += 1;
+            }
         }
         // todo korrekte Anzahl zurückgeben
-        Ok(0)
+        Ok(modi_statistics)
     }
 
     /// todo implement dry_run
@@ -307,46 +334,8 @@ impl<'a> Synchronisation<'a> {
 mod test {
     use super::*;
     use crate::sub::ldap_utils::test::start_test_server;
-    use crate::sub::synchronisation_config::SynchronisationConfig;
+    use crate::sub::synchronization_config::SynchronizationConfig;
     use indoc::*;
-
-    /*
-    #[test]
-    fn test_from_synchronisation_with_names() {
-        let sync_with_names = SynchronisationConfig {
-            source: "src".to_string(),
-            target: "trg".to_string(),
-            base_dns: vec![
-                "cn=org1".to_string(),
-                "cn=org2".to_string(),
-                "cn=org3".to_string(),
-            ],
-            ts_store: "trg".to_string(),
-            ts_base_dn: "cn=sync_timestamps".to_string(),
-        };
-
-        let service1 = LdapService {
-            url: "ldap://provider-ldap.de:389".to_string(),
-            bind_dn: "cn=admin,dc=source,dc=de".to_string(),
-            password: "secret".to_string(),
-            base_dn: "dc=source,dc=de".to_string(),
-        };
-
-        let service2 = LdapService {
-            url: "ldap://consumer-ldap.de:389".to_string(),
-            bind_dn: "cn=admin,dc=target,dc=de".to_string(),
-            password: "secret".to_string(),
-            base_dn: "dc=target,dc=de".to_string(),
-        };
-
-        let services =
-            HashMap::from([("src".to_string(), service1), ("trg".to_string(), service2)]);
-
-        let result = Synchronisation::from_synchronisation_with_names(&services, &sync_with_names);
-        assert_eq!(result.source_ref, services.get("src").unwrap());
-        assert_eq!(result.target_ref, services.get("trg").unwrap());
-    }
-    */
 
     #[tokio::test]
     async fn test_sync_modified() {
@@ -474,7 +463,7 @@ mod test {
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
 
-        let result = Synchronisation::sync_modify(
+        let result = Synchronization::sync_modify(
             &mut source_ldap,
             &mut target_ldap,
             &source_base_dn,
@@ -484,9 +473,10 @@ mod test {
             &Regex::new("^givenname$").unwrap(),
             true,
         )
-        .await;
+        .await.unwrap();
         info!("result: {:?}", result);
-        assert_eq!(result.unwrap(), 0);
+        assert_eq!(result.added, 2);
+        assert_eq!(result.modified, 2);
         // todo assert_eq 3 oder 4 inklusive cn=Users?
     }
 
@@ -602,7 +592,7 @@ mod test {
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
 
-        let result = Synchronisation::sync_delete(
+        let result = Synchronization::sync_delete(
             &mut source_ldap,
             &mut target_ldap,
             &source_base_dn,
@@ -676,7 +666,7 @@ mod test {
 
         let ldap_services_map = HashMap::from([(ts_store_name.clone(), ts_store_service)]);
 
-        let sync_config = SynchronisationConfig {
+        let sync_config = SynchronizationConfig {
             source: "provider".to_string(),
             target: "consumer".to_string(),
             base_dns: vec!["cn=unused".to_string()],
@@ -685,7 +675,7 @@ mod test {
             ts_dn: "o=provider-consumer,o=sync_timestamps".to_string(),
         };
 
-        let synchronisation = Synchronisation {
+        let synchronisation = Synchronization {
             ldap_services: &ldap_services_map,
             sync_config: &sync_config,
             dry_run: true,
@@ -765,7 +755,7 @@ mod test {
 
         let ldap_services_map = HashMap::from([(ts_store_name.clone(), ts_store_service)]);
 
-        let sync_config = SynchronisationConfig {
+        let sync_config = SynchronizationConfig {
             source: "provider".to_string(),
             target: "consumer".to_string(),
             base_dns: vec!["cn=unused".to_string()],
@@ -774,7 +764,7 @@ mod test {
             ts_dn: "o=provider-consumer,o=sync_timestamps".to_string(),
         };
 
-        let synchronisation = Synchronisation {
+        let synchronisation = Synchronization {
             ldap_services: &ldap_services_map,
             sync_config: &sync_config,
             dry_run: false,
@@ -792,4 +782,158 @@ mod test {
         debug!("result: {:?}", result);
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_synchronisation() {
+        let _ = env_logger::try_init();
+
+        let source_plain_port = 22389;
+        let source_tls_port = 22636;
+        let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
+        let source_bind_dn = "cn=admin,dc=test".to_string();
+        let source_password = "secret".to_string();
+        let source_base_dn = "dc=test".to_string();
+        let source_content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+            modifyTimestamp: 20231019182734Z
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+            modifyTimestamp: 20231019182735Z
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 20231019182736Z
+    
+            dn: o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: de
+            modifyTimestamp: 20231019182737Z
+
+            dn: o=AB,o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: AB
+            modifyTimestamp: 20231019182738Z
+
+            dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!
+            modifyTimestamp: 20231019182739Z"
+        };
+
+        let target_plain_port = 14389;
+        let target_tls_port = 14636;
+        let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
+        let target_bind_dn = "cn=admin,dc=test".to_string();
+        let target_password = "secret".to_string();
+        let target_base_dn = "dc=test".to_string();
+        let target_content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: o=sync_timestamps,dc=test
+            objectClass: organization
+            objectClass: extensibleObject
+            o: sync_timestamps
+            name: 19751129000000Z
+    
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+        
+            dn: o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: de
+
+            # to be deleted
+            dn: o=XY,o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: XY
+            
+            # to be deleted
+            dn: cn=xy012345,o=XY,o=de,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!"
+        };
+
+        let _source_server = start_test_server(
+            source_plain_port,
+            source_tls_port,
+            &source_base_dn,
+            source_content,
+        )
+        .await;
+        let _target_server = start_test_server(
+            target_plain_port,
+            target_tls_port,
+            &target_base_dn,
+            target_content,
+        )
+        .await;
+
+        //let src_base_dn = "dc=test".to_string();
+        //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
+        let source_service = LdapService {
+            url: source_url,
+            bind_dn: source_bind_dn,
+            password: source_password,
+            base_dn: source_base_dn.clone(),
+        };
+
+        let target_service = LdapService {
+            url: target_url,
+            bind_dn: target_bind_dn,
+            password: target_password,
+            base_dn: target_base_dn.clone(),
+        };
+
+        let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service)]);
+        let sync_config = SynchronizationConfig {
+            source: "ldap1".to_string(),
+            target: "ldap2".to_string(),
+            base_dns: vec!["ou=Users".to_string()],
+            ts_store: "ldap2".to_string(),
+            /// ts_dn is relative to the base_dn of the LdapService
+            ts_dn: "o=sync_timestamps".to_string(),
+        };
+
+        let synchronization = Synchronization {
+            ldap_services: &ldap_services,
+            sync_config: &sync_config,
+            exclude_attrs: &Regex::new("^givenname$").unwrap(),
+            dry_run: false,
+        };
+
+        let result = synchronization.synchronize().await.unwrap();
+        info!("result: {:?}", result);
+        assert_eq!(result.added, 2);
+        assert_eq!(result.modified, 2);
+        assert_eq!(result.deleted, 2);
+    }
+
 }

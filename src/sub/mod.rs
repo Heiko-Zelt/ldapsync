@@ -1,5 +1,5 @@
 pub mod app_config;
-pub mod synchronisation;
-pub mod synchronisation_config;
+pub mod synchronization;
+pub mod synchronization_config;
 pub mod cf_services;
 pub mod ldap_utils;

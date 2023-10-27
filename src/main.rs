@@ -8,7 +8,7 @@ use std::{env, time::Duration, path::Path};
 use std::collections::{HashSet, HashMap};
 
 use crate::sub::app_config::AppConfig;
-use crate::sub::synchronisation::Synchronisation;
+use crate::sub::synchronization::Synchronization;
 use crate::sub::cf_services::LdapService;
 
 
@@ -33,10 +33,10 @@ async fn main() {
         .collect();
     */
 
-    let synchronisations: Vec<Synchronisation> = app_config.synchronisation_configs
+    let synchronizations: Vec<Synchronization> = app_config.synchronization_configs
         .iter()
         .map(|sync_config|
-            Synchronisation {
+            Synchronization {
                 ldap_services: &app_config.ldap_services,
                 sync_config: sync_config,
                 dry_run: app_config.dry_run,
@@ -45,14 +45,18 @@ async fn main() {
         )
         .collect();
 
+    // todo for every synchronisation: create entry to store synchronisation timestamps
 
     // endless loop/daemon
     loop {
-        info!("Start synchronisations.");
-        for synchro in synchronisations.iter() {
+        info!("Start synchronizations.");
+        for synchro in synchronizations.iter() {
             let result = synchro.synchronize().await;
             match result {
-                Ok(n) => info!("Synchronization was successfull. Number of entries synchronized: {}", n),
+                Ok(stats) => info!(
+                    "Synchronization was successfull. Entries added: {}, modified: {}, deleted: {}",
+                    stats.added, stats.modified, stats.deleted
+                ),
                 Err(e) => error!("Synchronization failed. {:?}", e)
             }
         }
