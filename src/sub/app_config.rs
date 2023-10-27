@@ -1,10 +1,23 @@
 use log::{debug, error, info};
 use regex::Regex;
-use std::{env, str::FromStr, time::Duration, collections::HashMap};
+use std::{env, env::VarError, str::FromStr, time::Duration, collections::HashMap};
 
 use crate::sub::synchronization_config::SynchronizationConfig;
 use crate::sub::cf_services::{get_ldap_services_by_names, LdapService};
 
+pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
+pub const SYNCHRONIZATIONS: &str = "SYNCHRONIZATIONS";
+pub const EXCLUDE_ATTRS: &str = "EXCLUDE_ATTRS";
+pub const JOB_SLEEP: &str = "JOB_SLEEP";
+pub const DRY_RUN: &str = "DRY_RUN";
+
+#[derive(Debug, PartialEq)]
+pub enum AppConfigError {
+    EnvVarError{env_var_name: String, cause: VarError},
+    EnvVarParseError{env_var_name: String},
+    EnvVarParseRegexError{env_var_name: String, cause: regex::Error},
+    // todo EnvVarJsonParseError{env_var_name: String, cause: J S O N Error},
+}
 
 #[derive(Debug)]
 pub struct AppConfig {
@@ -18,48 +31,61 @@ pub struct AppConfig {
 impl AppConfig {
     /// example input "15 min" or "10 sec"
     /// todo error handling, return Result
-    pub fn parse_duration(hay: &str) -> Duration {
-        let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap();
-        let caps = re.captures(hay).unwrap();
-        let number_str = caps.get(1).unwrap().as_str();
-        let unit_str = caps.get(2).unwrap().as_str();
+    pub fn parse_duration(hay: &str) -> Option<Duration> {
+        let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap(); // assumption: works always or never
+        let captures = re.captures(hay)?;
+        
+        let number_str = captures.get(1).unwrap().as_str();
+        let unit_str = captures.get(2).unwrap().as_str();
         let number = number_str.parse().unwrap();
         if unit_str == "sec" {
-            Duration::from_secs(number)
+            Some(Duration::from_secs(number))
         } else {
-            Duration::from_secs(number * 60)
+            Some(Duration::from_secs(number * 60))
         }
     }
 
-    pub fn from_cf_env() -> AppConfig {
+    pub fn from_cf_env() -> Result<AppConfig, AppConfigError> {
         debug!("from_cf_env()");
-        let job_sleep_str = env::var("JOB_SLEEP").unwrap();
-        debug!("JOB_SLEEP: {}", job_sleep_str);
-        let dry_run_str = env::var("DRY_RUN").unwrap();
-        debug!("DRY_RUN: {}", dry_run_str);
-        let exclude_attrs_pattern = env::var("EXCLUDE_ATTRS").unwrap();
 
         debug!("VCAP_SERVICES: {:?}", env::var("VCAP_SERVICES"));
         let ldap_services_map = get_ldap_services_by_names().unwrap();
         debug!("ldap services by names: {:?}", ldap_services_map);
         
-        let synchronizations_json = env::var("SYNCHRONIZATIONS").unwrap();
-        debug!("SYNCHRONIZATIONS: {}", synchronizations_json);
-
-        //let synchronisations_vec = Vec::new();
-
+        let synchronizations_str = env::var(SYNCHRONIZATIONS)
+            .map_err(|err| AppConfigError::EnvVarError{env_var_name: SYNCHRONIZATIONS.to_string(), cause: err} )?;
+        debug!("SYNCHRONIZATIONS: {}", synchronizations_str);
         let synchronizations_vec =
-            SynchronizationConfig::parse_synchronizations(&synchronizations_json);
-        // todo parse services & synchronsations
+            SynchronizationConfig::parse_synchronizations(&synchronizations_str);
+
+        let exclude_attrs_str = env::var(EXCLUDE_ATTRS)
+            .map_err(|err| AppConfigError::EnvVarError{env_var_name: EXCLUDE_ATTRS.to_string(), cause: err} )?;
+        debug!("EXCLUDE_ATTRS: {}", exclude_attrs_str);
+        let exclude_attrs_pattern = Regex::new(&exclude_attrs_str)
+            .map_err(|err| AppConfigError::EnvVarParseRegexError{env_var_name: EXCLUDE_ATTRS.to_string(), cause: err})?;
+
+        let job_sleep_str = env::var(JOB_SLEEP)
+            .map_err(|err| AppConfigError::EnvVarError{env_var_name: JOB_SLEEP.to_string(), cause: err} )?;
+        debug!("JOB_SLEEP: {}", job_sleep_str);
+        let job_sleep_duration = Self::parse_duration(&job_sleep_str)
+            .ok_or(AppConfigError::EnvVarParseError{env_var_name: JOB_SLEEP.to_string()})?;
+
+        let dry_run_str = env::var(DRY_RUN)
+            .map_err(|err| AppConfigError::EnvVarError{env_var_name: DRY_RUN.to_string(), cause: err} )?;
+        debug!("DRY_RUN: {}", dry_run_str);
+        let dry_run_bool = bool::from_str(&dry_run_str)
+            .map_err(|_| AppConfigError::EnvVarParseError{env_var_name: DRY_RUN.to_string()})?;
+
+        // todo parse error handling services & synchronsations
 
         let config = AppConfig {
-            job_sleep: Self::parse_duration(&job_sleep_str),
-            dry_run: bool::from_str(&dry_run_str).unwrap(),
-            exclude_attrs: Regex::new(&exclude_attrs_pattern).unwrap(),
+            job_sleep: job_sleep_duration,
+            dry_run: dry_run_bool,
+            exclude_attrs: exclude_attrs_pattern,
             ldap_services: ldap_services_map,
             synchronization_configs: synchronizations_vec,
         };
-        config
+        Ok(config)
     }
 }
 
@@ -71,7 +97,7 @@ mod test {
 
     // todo write unit tests with errors in configuration. Are error messages user friendly?
     #[test]
-    fn test_from_cf_env() {
+    fn test_from_cf_env_valid() {
         env::set_var("JOB_SLEEP", "10 sec");
         env::set_var("DRY_RUN", "true");
         env::set_var("EXCLUDE_ATTRS", "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
@@ -113,7 +139,7 @@ mod test {
         "#},
         );
 
-        let app_config = AppConfig::from_cf_env();
+        let app_config = AppConfig::from_cf_env().unwrap();
         debug!("app_config: {:?}", app_config);
         assert_eq!(app_config.job_sleep, Duration::from_secs(10));
         assert_eq!(app_config.dry_run, true);
@@ -125,11 +151,23 @@ mod test {
         //todo more asserts
     }
 
+    #[test]
+    fn test_from_cf_env_missing_env_var() {
+
+        let app_config = AppConfig::from_cf_env();
+        debug!("app_config: {:?}", app_config);
+        assert!(app_config.is_err());
+        let err = app_config.expect_err("AppConfigError was expected as result");
+        assert_eq!(err, AppConfigError::EnvVarError{ env_var_name: VCAP_SERVICES.to_string(), cause: VarError::NotPresent});
+    }
+
     #[rstest]
-    #[case("10 sec", Duration::from_secs(10))]
-    #[case("1 min", Duration::from_secs(60))]
-    #[case(" 60  min ", Duration::from_secs(60 * 60))]
-    fn test_parse_duration(#[case] hay: &str, #[case] expected: Duration) {
+    #[case("10 sec", Some(Duration::from_secs(10)))]
+    #[case("1 min", Some(Duration::from_secs(60)))]
+    #[case(" 60  min ", Some(Duration::from_secs(60 * 60)))]
+    #[case("eine Ewigkeit", None)]
+    #[case("13 Minütchen", None)]
+    fn test_parse_duration(#[case] hay: &str, #[case] expected: Option<Duration>) {
         let result = AppConfig::parse_duration(hay);
         assert_eq!(result, expected);
     }

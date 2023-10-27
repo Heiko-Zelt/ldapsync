@@ -72,7 +72,7 @@ export VCAP_SERVICES='{
         "url": "ldap://ldap1.provider.de:389",
         "bind_dn": "cn=admin1,dc=de",
         "password": "secret1",
-        "base": "dc=de"
+        "base_dn": "dc=de"
       }
     },
     {
@@ -81,7 +81,7 @@ export VCAP_SERVICES='{
         "url": "ldap://ldap2.consumer.de:389",
         "bind_dn": "cn=admin2,dc=de",
         "password": "secret2",
-        "base": "dc=de"
+        "base_dn": "dc=de"
       }
     }
   ]
@@ -131,7 +131,7 @@ export VCAP_SERVICES="export VCAP_SERVICES='{
         "url": "ldap://ldap1.org1.de:389",
         "bind_dn": "cn=admin1,dc=de",
         "password": "secret1",
-        "base": "dc=de"
+        "base_dn": "dc=de"
       }
     },
     {
@@ -140,7 +140,7 @@ export VCAP_SERVICES="export VCAP_SERVICES='{
         "url": "ldap://ldap2.org2.de:389",        
         "bind_dn": "cn=admin2,dc=de",
         "password": "secret2",
-        "base": "dc=de"
+        "base_dn": "dc=de"
       }
     },
     {
@@ -149,7 +149,7 @@ export VCAP_SERVICES="export VCAP_SERVICES='{
         "url": "ldap://ldap3.org3.de:389",
         "bind_dn": "cn=admin3,dc=de",
         "password": "secret3",
-        "base": "dc=de"
+        "base_dn": "dc=de"
       }
     },
     {
@@ -158,7 +158,7 @@ export VCAP_SERVICES="export VCAP_SERVICES='{
         "url": "ldap://ldap4.org4.de:389",
         "bind_dn": "cn=admin4,dc=de",
         "password": "secret4",
-        "base": "dc=de"
+        "base_dn": "dc=de"
       }
     }
   ]

@@ -108,7 +108,7 @@ impl<'a> Synchronization<'a> {
             sync_statistics.modified += modi_statistics.modified;
         }
 
-        if sync_statistics.added != 0 || sync_statistics.modified != 0 {
+        if sync_statistics.added != 0 && sync_statistics.modified != 0 && !self.dry_run {
             self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
                 .await
                 .unwrap();
@@ -245,9 +245,9 @@ impl<'a> Synchronization<'a> {
         exclude_attrs: &Regex,
         dry_run: bool,
     ) -> Result<ModiStatistics, LdapError> {
-        info!(
-            "sync_modify(source_ldap: {:?}, target_ldap: {:?}, old_modify_timestamp: {:?})",
-            source_ldap, target_ldap, old_modify_timestamp
+        debug!(
+            "sync_modify(source_base_dn: {:?}, target_base_dn: {:?}, sync_dn: {:?}, old_modify_timestamp: {:?})",
+            source_base_dn, target_base_dn, sync_dn, old_modify_timestamp
         );
 
         let mut modi_statistics = ModiStatistics { added: 0, modified: 0 };
@@ -297,7 +297,7 @@ impl<'a> Synchronization<'a> {
         target_base_dn: &str,
         source_search_entry: SearchEntry,
         exclude_attrs: &Regex,
-        _dry_run: bool,
+        dry_run: bool,
     ) -> Result<bool, LdapError> {
         debug!("source entry: {:?}", source_search_entry);
 
@@ -309,7 +309,9 @@ impl<'a> Synchronization<'a> {
         match target_search_entry {
             Some(entry) => {
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
-                target_ldap.modify(&target_dn, mods).await?;
+                if !dry_run {
+                    target_ldap.modify(&target_dn, mods).await?;
+                }
                 Ok(true)
             }
             None => {
@@ -323,7 +325,9 @@ impl<'a> Synchronization<'a> {
                         (a, vs)
                     })
                     .collect::<Vec<(String, HashSet<String>)>>();
-                target_ldap.add(&target_dn, target_attrs).await?;
+                if !dry_run {
+                    target_ldap.add(&target_dn, target_attrs).await?;
+                }
                 Ok(false)
             }
         }
