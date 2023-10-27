@@ -1,9 +1,9 @@
 use log::{debug, error, info};
 use regex::Regex;
-use std::{env, env::VarError, str::FromStr, time::Duration, collections::HashMap};
+use std::{collections::HashMap, env, env::VarError, str::FromStr, time::Duration};
 
+use crate::sub::cf_services::{map_ldap_services, parse_ldap_services, LdapService};
 use crate::sub::synchronization_config::SynchronizationConfig;
-use crate::sub::cf_services::{get_ldap_services_by_names, LdapService};
 
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
 pub const SYNCHRONIZATIONS: &str = "SYNCHRONIZATIONS";
@@ -11,12 +11,36 @@ pub const EXCLUDE_ATTRS: &str = "EXCLUDE_ATTRS";
 pub const JOB_SLEEP: &str = "JOB_SLEEP";
 pub const DRY_RUN: &str = "DRY_RUN";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+pub enum LdapServiceUsage {
+    Source,
+    Target,
+    TsStore,
+}
+
+#[derive(Debug)]
 pub enum AppConfigError {
-    EnvVarError{env_var_name: String, cause: VarError},
-    EnvVarParseError{env_var_name: String},
-    EnvVarParseRegexError{env_var_name: String, cause: regex::Error},
-    // todo EnvVarJsonParseError{env_var_name: String, cause: J S O N Error},
+    EnvVarError {
+        env_var_name: String,
+        cause: VarError,
+    },
+    EnvVarParseError {
+        env_var_name: String,
+    },
+    EnvVarParseRegexError {
+        env_var_name: String,
+        cause: regex::Error,
+    },
+    EnvVarParseJsonError {
+        env_var_name: String,
+        cause: serde_json::Error,
+    },
+    LdapServiceMissing {
+        service_name: String,
+        synchronisation_index: usize,
+        usage: LdapServiceUsage,
+    },
+    UserProvidedCfServicesMissing,
 }
 
 #[derive(Debug)]
@@ -34,7 +58,7 @@ impl AppConfig {
     pub fn parse_duration(hay: &str) -> Option<Duration> {
         let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap(); // assumption: works always or never
         let captures = re.captures(hay)?;
-        
+
         let number_str = captures.get(1).unwrap().as_str();
         let unit_str = captures.get(2).unwrap().as_str();
         let number = number_str.parse().unwrap();
@@ -48,33 +72,92 @@ impl AppConfig {
     pub fn from_cf_env() -> Result<AppConfig, AppConfigError> {
         debug!("from_cf_env()");
 
-        debug!("VCAP_SERVICES: {:?}", env::var("VCAP_SERVICES"));
-        let ldap_services_map = get_ldap_services_by_names().unwrap();
-        debug!("ldap services by names: {:?}", ldap_services_map);
-        
-        let synchronizations_str = env::var(SYNCHRONIZATIONS)
-            .map_err(|err| AppConfigError::EnvVarError{env_var_name: SYNCHRONIZATIONS.to_string(), cause: err} )?;
+        let synchronizations_str =
+            env::var(SYNCHRONIZATIONS).map_err(|err| AppConfigError::EnvVarError {
+                env_var_name: SYNCHRONIZATIONS.to_string(),
+                cause: err,
+            })?;
         debug!("SYNCHRONIZATIONS: {}", synchronizations_str);
-        let synchronizations_vec =
-            SynchronizationConfig::parse_synchronizations(&synchronizations_str);
+        let synchronizations_vec = SynchronizationConfig::parse_synchronizations(
+            &synchronizations_str,
+        )
+        .map_err(|err| AppConfigError::EnvVarParseJsonError {
+            env_var_name: SYNCHRONIZATIONS.to_string(),
+            cause: err,
+        })?;
 
-        let exclude_attrs_str = env::var(EXCLUDE_ATTRS)
-            .map_err(|err| AppConfigError::EnvVarError{env_var_name: EXCLUDE_ATTRS.to_string(), cause: err} )?;
+        let vcap_services_str =
+            env::var(VCAP_SERVICES).map_err(|err| AppConfigError::EnvVarError {
+                env_var_name: VCAP_SERVICES.to_string(),
+                cause: err,
+            })?;
+        debug!("VCAP_SERVICES: {:?}", vcap_services_str);
+        let vcap_services_map = parse_ldap_services(&vcap_services_str).map_err(|err| {
+            AppConfigError::EnvVarParseJsonError {
+                env_var_name: SYNCHRONIZATIONS.to_string(),
+                cause: err,
+            }
+        })?;
+        let ldap_services_map = map_ldap_services(&vcap_services_map)
+            .ok_or(AppConfigError::UserProvidedCfServicesMissing)?;
+        debug!("ldap services by names: {:?}", ldap_services_map);
+
+        for (index, sync_config) in synchronizations_vec.iter().enumerate() {
+            if !ldap_services_map.contains_key(&sync_config.source) {
+                return Err(AppConfigError::LdapServiceMissing {
+                    service_name: sync_config.source.clone(),
+                    synchronisation_index: index,
+                    usage: LdapServiceUsage::Source,
+                });
+            }
+            if !ldap_services_map.contains_key(&sync_config.target) {
+                return Err(AppConfigError::LdapServiceMissing {
+                    service_name: sync_config.target.clone(),
+                    synchronisation_index: index,
+                    usage: LdapServiceUsage::Target,
+                });
+            }
+            if !ldap_services_map.contains_key(&sync_config.ts_store) {
+                return Err(AppConfigError::LdapServiceMissing {
+                    service_name: sync_config.target.clone(),
+                    synchronisation_index: index,
+                    usage: LdapServiceUsage::TsStore,
+                });
+            }
+        }
+
+        let exclude_attrs_str =
+            env::var(EXCLUDE_ATTRS).map_err(|err| AppConfigError::EnvVarError {
+                env_var_name: EXCLUDE_ATTRS.to_string(),
+                cause: err,
+            })?;
         debug!("EXCLUDE_ATTRS: {}", exclude_attrs_str);
-        let exclude_attrs_pattern = Regex::new(&exclude_attrs_str)
-            .map_err(|err| AppConfigError::EnvVarParseRegexError{env_var_name: EXCLUDE_ATTRS.to_string(), cause: err})?;
+        let exclude_attrs_pattern = Regex::new(&exclude_attrs_str).map_err(|err| {
+            AppConfigError::EnvVarParseRegexError {
+                env_var_name: EXCLUDE_ATTRS.to_string(),
+                cause: err,
+            }
+        })?;
 
-        let job_sleep_str = env::var(JOB_SLEEP)
-            .map_err(|err| AppConfigError::EnvVarError{env_var_name: JOB_SLEEP.to_string(), cause: err} )?;
+        let job_sleep_str = env::var(JOB_SLEEP).map_err(|err| AppConfigError::EnvVarError {
+            env_var_name: JOB_SLEEP.to_string(),
+            cause: err,
+        })?;
         debug!("JOB_SLEEP: {}", job_sleep_str);
-        let job_sleep_duration = Self::parse_duration(&job_sleep_str)
-            .ok_or(AppConfigError::EnvVarParseError{env_var_name: JOB_SLEEP.to_string()})?;
+        let job_sleep_duration =
+            Self::parse_duration(&job_sleep_str).ok_or(AppConfigError::EnvVarParseError {
+                env_var_name: JOB_SLEEP.to_string(),
+            })?;
 
-        let dry_run_str = env::var(DRY_RUN)
-            .map_err(|err| AppConfigError::EnvVarError{env_var_name: DRY_RUN.to_string(), cause: err} )?;
+        let dry_run_str = env::var(DRY_RUN).map_err(|err| AppConfigError::EnvVarError {
+            env_var_name: DRY_RUN.to_string(),
+            cause: err,
+        })?;
         debug!("DRY_RUN: {}", dry_run_str);
-        let dry_run_bool = bool::from_str(&dry_run_str)
-            .map_err(|_| AppConfigError::EnvVarParseError{env_var_name: DRY_RUN.to_string()})?;
+        let dry_run_bool =
+            bool::from_str(&dry_run_str).map_err(|_| AppConfigError::EnvVarParseError {
+                env_var_name: DRY_RUN.to_string(),
+            })?;
 
         // todo parse error handling services & synchronsations
 
@@ -100,7 +183,10 @@ mod test {
     fn test_from_cf_env_valid() {
         env::set_var("JOB_SLEEP", "10 sec");
         env::set_var("DRY_RUN", "true");
-        env::set_var("EXCLUDE_ATTRS", "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
+        env::set_var(
+            "EXCLUDE_ATTRS",
+            "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$",
+        );
         env::set_var(
             "VCAP_SERVICES",
             indoc! {r#"{
@@ -143,7 +229,10 @@ mod test {
         debug!("app_config: {:?}", app_config);
         assert_eq!(app_config.job_sleep, Duration::from_secs(10));
         assert_eq!(app_config.dry_run, true);
-        assert_eq!(app_config.exclude_attrs.as_str(), "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$");
+        assert_eq!(
+            app_config.exclude_attrs.as_str(),
+            "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$"
+        );
         assert_eq!(app_config.ldap_services.len(), 2);
         assert!(app_config.ldap_services.contains_key("ldap1"));
         assert!(app_config.ldap_services.contains_key("ldap2"));
@@ -151,14 +240,83 @@ mod test {
         //todo more asserts
     }
 
+    /// test with --test-threads=1
     #[test]
     fn test_from_cf_env_missing_env_var() {
+        env::remove_var(VCAP_SERVICES.to_string());
+        env::remove_var(SYNCHRONIZATIONS.to_string());
 
         let app_config = AppConfig::from_cf_env();
         debug!("app_config: {:?}", app_config);
         assert!(app_config.is_err());
         let err = app_config.expect_err("AppConfigError was expected as result");
-        assert_eq!(err, AppConfigError::EnvVarError{ env_var_name: VCAP_SERVICES.to_string(), cause: VarError::NotPresent});
+
+        match err {
+            AppConfigError::EnvVarError {
+                env_var_name: name,
+                cause: err,
+            } => {
+                assert_eq!(name, SYNCHRONIZATIONS);
+                assert_eq!(err, VarError::NotPresent);
+            }
+            _ => {
+                panic!("wrong error enum variant");
+            }
+        }
+    }
+
+    /// test with --test-threads=1
+    #[test]
+    fn test_from_cf_env_synchronizations_invalid_json() {
+        env::remove_var(VCAP_SERVICES.to_string());
+        env::set_var(SYNCHRONIZATIONS, "[ { Unsinn } ]");
+        let app_config = AppConfig::from_cf_env();
+        debug!("app_config: {:?}", app_config);
+        assert!(app_config.is_err());
+        let err = app_config.expect_err("AppConfigError was expected as result");
+        print!("{:?}", err);
+        match err {
+            AppConfigError::EnvVarParseJsonError {
+                env_var_name: name,
+                cause: err,
+            } => {
+                assert_eq!(name, SYNCHRONIZATIONS);
+                assert_eq!(err.line(), 1);
+                assert_eq!(err.column(), 5);
+                assert_eq!(err.classify(), serde_json::error::Category::Syntax);
+                assert_eq!(err.to_string(), "key must be a string at line 1 column 5");
+            }
+            _ => {
+                panic!("wrong error enum variant");
+            }
+        }
+    }
+
+    /// test with --test-threads=1
+    #[test]
+    fn test_from_cf_env_vcap_services_invalid_json() {
+        env::remove_var(VCAP_SERVICES.to_string());
+        env::set_var(SYNCHRONIZATIONS, "[ { Unsinn } ]");
+        let app_config = AppConfig::from_cf_env();
+        debug!("app_config: {:?}", app_config);
+        assert!(app_config.is_err());
+        let err = app_config.expect_err("AppConfigError was expected as result");
+        print!("{:?}", err);
+        match err {
+            AppConfigError::EnvVarParseJsonError {
+                env_var_name: name,
+                cause: err,
+            } => {
+                assert_eq!(name, SYNCHRONIZATIONS);
+                assert_eq!(err.line(), 1);
+                assert_eq!(err.column(), 5);
+                assert_eq!(err.classify(), serde_json::error::Category::Syntax);
+                assert_eq!(err.to_string(), "key must be a string at line 1 column 5");
+            }
+            _ => {
+                panic!("wrong error enum variant");
+            }
+        }
     }
 
     #[rstest]
@@ -171,5 +329,4 @@ mod test {
         let result = AppConfig::parse_duration(hay);
         assert_eq!(result, expected);
     }
-    
 }

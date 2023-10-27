@@ -29,6 +29,7 @@ pub struct LdapService {
     pub base_dn: String,
 }
 
+
 /// to reduce the size of the required JSON code most fileds are Optional
 /// except name
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -46,7 +47,9 @@ pub struct Service<Credentials = Value> {
     pub volume_mounts: Option<Vec<String>>,
 }
 
+/*
 /// Maps service types like "mongodb" or "user-provided" to services.
+
 type ServiceMap = HashMap<String, Vec<Service>>;
 
 pub fn get_services() -> Result<ServiceMap, Error<'static>> {
@@ -58,9 +61,36 @@ pub fn get_services() -> Result<ServiceMap, Error<'static>> {
         Err(_) => Err(Error::EnvNotSet(VCAP_SERVICES)),
     }
 }
+*/
+
+/// todo in mehrere Schritte aufteilen
+
+pub fn parse_ldap_services(vcap_services_str: &str) -> Result<HashMap<String, Vec<Service<LdapService>>>, serde_json::Error>{
+    let result = serde_json::from_str::<HashMap<String, Vec<Service<LdapService>>>>(vcap_services_str);
+    result
+}
+
+pub fn map_ldap_services(type_to_vec_map: &HashMap<String, Vec<Service<LdapService>>>) -> Option<HashMap<String, LdapService>> {
+    // todo
+    let user_provided_services = type_to_vec_map.get("user-provided")?;
+    let name_to_service_map = user_provided_services
+        .iter()
+        .map(|service| {
+            let ldap_service = LdapService {
+                url: service.credentials.url.clone(),
+                bind_dn: service.credentials.bind_dn.clone(),
+                password: service.credentials.password.clone(),
+                base_dn: service.credentials.base_dn.clone(),
+            };
+            (service.name.clone(), ldap_service)
+        })
+        .collect();
+    Some(name_to_service_map)
+}
 
 /// returns a map of LdapServices. Key is the name of the service.
 /// That's a more useful data structure than the original JSON structure.
+/*
 pub fn get_ldap_services_by_names() -> Result<HashMap<String, LdapService>, Error<'static>>
 {
     //let cf_services = get_services();
@@ -95,7 +125,11 @@ pub fn get_ldap_services_by_names() -> Result<HashMap<String, LdapService>, Erro
         Err(_) => Err(Error::EnvNotSet(VCAP_SERVICES)),
     }
 }
+*/
+
+/*
 /// todo Error, wenn 2 Services mit gleichem Namen existieren
+
 pub fn get_service_by_name<T>(name: &str) -> Result<Service<T>, Error>
 where
     T: DeserializeOwned,
@@ -123,6 +157,7 @@ where
         Err(e) => Err(e),
     }
 }
+ */
 
 #[cfg(test)]
 mod test {
@@ -132,8 +167,6 @@ mod test {
 
     #[test]
     fn test_get_services_full() {
-        use std::collections::HashMap;
-
         let full_services_json = indoc! {r#"
         {
             "user-provided": [
@@ -159,20 +192,23 @@ mod test {
             ]
         }"#};
 
-        std::env::set_var("VCAP_SERVICES", full_services_json);
-        let cf_services = get_services();
+        let result = parse_ldap_services(full_services_json).unwrap();
 
-        assert!(cf_services.is_ok());
-        assert_eq!(
-            cf_services.unwrap(),
-            serde_json::from_str::<HashMap<String, Vec<Service>>>(full_services_json).unwrap()
-        );
+        assert_eq!(result.len(), 1);
+        let user_provided_services = result.get("user-provided").unwrap();
+        assert_eq!(user_provided_services.len(), 1);
+        let cf_service = &user_provided_services[0];
+        assert_eq!(cf_service.name, "ldap1");
+        let credentials = &cf_service.credentials;
+        assert_eq!(credentials.base_dn, "dc=de");
+        assert_eq!(credentials.bind_dn, "cn=admin1,dc=de");
+        assert_eq!(credentials.password, "secret1");
+        assert_eq!(credentials.url, "ldap://ldap1.provider.de:389");
+
     }
 
     #[test]
     fn test_get_services_minimal() {
-        use std::collections::HashMap;
-
         let minimal_services_json = indoc! {r#"
         {
             "user-provided": [
@@ -188,16 +224,21 @@ mod test {
             ]
         }"#};
 
-        std::env::set_var("VCAP_SERVICES", minimal_services_json);
-        let cf_services = get_services();
+        let result = parse_ldap_services(minimal_services_json).unwrap();
 
-        assert!(cf_services.is_ok());
-        assert_eq!(
-            cf_services.unwrap(),
-            serde_json::from_str::<HashMap<String, Vec<Service>>>(minimal_services_json).unwrap()
-        );
+        assert_eq!(result.len(), 1);
+        let user_provided_services = result.get("user-provided").unwrap();
+        assert_eq!(user_provided_services.len(), 1);
+        let cf_service = &user_provided_services[0];
+        assert_eq!(cf_service.name, "ldap1");
+        let credentials = &cf_service.credentials;
+        assert_eq!(credentials.base_dn, "dc=de");
+        assert_eq!(credentials.bind_dn, "cn=admin1,dc=de");
+        assert_eq!(credentials.password, "secret1");
+        assert_eq!(credentials.url, "ldap://ldap1.provider.de:389");
     }
 
+    /*
     #[test]
     fn test_get_service_by_name_minimal() {
         let minimal_services_json = indoc! {r#"
@@ -234,7 +275,9 @@ mod test {
         assert_eq!(cf_service.credentials.password, "secret1");
         assert_eq!(cf_service.credentials.base_dn, "dc=de");
     }
+    */
 
+    /*
     #[test]
     fn test_get_ldap_services_by_names() {
         let minimal_services_json = indoc! {r#"
@@ -278,6 +321,6 @@ mod test {
         assert_eq!(ldap1.password, "secret2");
         assert_eq!(ldap1.base_dn, "dc=de");
     }
-
+    */
 
 }

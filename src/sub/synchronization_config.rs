@@ -11,8 +11,8 @@ pub struct SynchronizationConfig {
 }
 
 impl SynchronizationConfig {
-    pub fn parse_synchronizations(json_vec: &str) -> Vec<SynchronizationConfig> {
-        serde_json::from_str(json_vec).unwrap()
+    pub fn parse_synchronizations(json_str: &str) -> Result<Vec<SynchronizationConfig>,serde_json::Error> {
+        serde_json::from_str(json_str)
     }
 }
 
@@ -48,9 +48,9 @@ mod test {
     }
  
     #[test]
-    fn test_parse_synchronisations() {
+    fn test_parse_synchronisations_valid() {
         let json_str = r#"[{ "source": "ldap1", "target": "ldap2", "base_dns": [ "cn=users", "cn=groups" ], "ts_store": "ldap2", "ts_dn": "o=ldap1-ldap2,o=sync_timestamps" }]"#;
-        let sync_configs = SynchronizationConfig::parse_synchronizations(json_str);
+        let sync_configs = SynchronizationConfig::parse_synchronizations(json_str).unwrap();
         assert_eq!(sync_configs.len(), 1);
         let first = &sync_configs[0];
         assert_eq!(first.source, "ldap1");
@@ -61,5 +61,14 @@ mod test {
         assert_eq!(base_dns[1], "cn=groups");
         assert_eq!(first.ts_store, "ldap2");
         assert_eq!(first.ts_dn, "o=ldap1-ldap2,o=sync_timestamps");
+    }
+
+    #[test]
+    fn test_parse_synchronisations_invalid() {
+        let json_str = r#"[{ "source": "ldap1", "target": "ldap2" Unsinn":"#;
+        let result = SynchronizationConfig::parse_synchronizations(json_str);
+        let err = result.expect_err("parse JSON error expected");
+        print!("{:?}", err);
+        //todo assert_eq!(err, serde_json::Error{});
     }
 }
