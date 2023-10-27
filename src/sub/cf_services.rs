@@ -1,17 +1,15 @@
-/// Because cf-env-crate has a bug, I wrote my own get_services() functions.
+/// Because cf-env-crate has a bug, I wrote my own functions.
 /// The bug I found is, "plan" ist not optional and not provided by my Cloud Foundry instance.
 /// It's much slimmer and allows more optional fields in the VCAP_SERVICES-JSON code.
 /// That reduces the size of the configuration, if testing or deploying outside Cloud Foundry.
-///
-/// todo Was ich eigentlich brauche: HashMap mit Names des Services -> LdapService/LdapCredentials
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::env;
 
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
 
-// todo JsonMalformed erweitern um Infos zum Parsing Error, Zeile, Spalte, Syntax Fehler
+/*
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum Error<'a> {
     EnvNotSet(&'a str),
@@ -19,6 +17,7 @@ pub enum Error<'a> {
     ServiceNotPresent(&'a str),
     ServiceTypeNotPresent(&'a str),
 }
+*/
 
 /// equals "credentials" in Cloud Foundry JSON code
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -28,7 +27,6 @@ pub struct LdapService {
     pub password: String,
     pub base_dn: String,
 }
-
 
 /// to reduce the size of the required JSON code most fileds are Optional
 /// except name
@@ -70,6 +68,8 @@ pub fn parse_ldap_services(vcap_services_str: &str) -> Result<HashMap<String, Ve
     result
 }
 
+/// converts the Cloud Foundry JSON structure in a more convinient map.
+/// If there are no "user-provided" services, None is returned.
 pub fn map_ldap_services(type_to_vec_map: &HashMap<String, Vec<Service<LdapService>>>) -> Option<HashMap<String, LdapService>> {
     // todo
     let user_provided_services = type_to_vec_map.get("user-provided")?;
@@ -166,7 +166,7 @@ mod test {
     use rstest::*;
 
     #[test]
-    fn test_get_services_full() {
+    fn test_parse_ldap_services_full() {
         let full_services_json = indoc! {r#"
         {
             "user-provided": [
@@ -208,7 +208,7 @@ mod test {
     }
 
     #[test]
-    fn test_get_services_minimal() {
+    fn test_parse_ldap_services_minimal() {
         let minimal_services_json = indoc! {r#"
         {
             "user-provided": [
@@ -237,6 +237,42 @@ mod test {
         assert_eq!(credentials.password, "secret1");
         assert_eq!(credentials.url, "ldap://ldap1.provider.de:389");
     }
+
+    #[test]
+    fn test_map_ldap_services() {
+        let credentials = LdapService {
+            url: "ldap://ldap1.provider.de:389".to_string(),
+            bind_dn: "cn=admin1,dc=de".to_string(),
+            password: "secret1".to_string(),
+            base_dn: "dc=de".to_string(),
+        };
+        let service = Service {
+            binding_guid: None,
+            binding_name: None,
+            instance_guid: None,
+            instance_name: None,
+            name: "active_dir".to_string(),
+            label: None,
+            tags: None,
+            plan: None,
+            credentials: credentials,
+            syslog_drain_url: None,
+            volume_mounts: None,
+        };
+        let services = vec![service];
+        let type_to_vec_map: HashMap<String, Vec<Service<LdapService>>> =
+            HashMap::from( [("user-provided".to_string(), services)]);
+
+        let ldap_services_map = map_ldap_services(&type_to_vec_map).unwrap();
+
+        assert_eq!(ldap_services_map.len(), 1);
+        let entry = ldap_services_map.get("active_dir").unwrap();
+        assert_eq!(entry.url, "ldap://ldap1.provider.de:389");
+        assert_eq!(entry.bind_dn, "cn=admin1,dc=de");
+        assert_eq!(entry.password, "secret1");
+        assert_eq!(entry.base_dn, "dc=de");
+    }
+
 
     /*
     #[test]
