@@ -6,7 +6,7 @@ which synchronizes subtrees of LDAP directories continously.
 Multiple LDAP directories and subtrees can be synchronized.
 A Synchronization is directional from provider to consumer (master-slave).
 
-It is meant to run continuously as an App in Cloud Foundry.
+It is meant to run continuously as an app in Cloud Foundry.
 The configuration is read from environment variables.
 It is possible to run outside Cloud Foundry,
 but environment variables have to be set like in Cloud Foundry.
@@ -19,7 +19,7 @@ It may work with other directory servers too, which implement the LDAPv3 protoco
 In general you should regularily, automatically backup your data.
 But maybe before running this programm, you should manually create an additional backup.
 Even I testet this software, I cannot garantee it is free of bugs.
-If you configure it wrong, LDAP data may be deleted.
+If you configure it wrong, LDAP data may accidentally be deleted.
 
 ## Algorithm
 
@@ -178,5 +178,5 @@ export SYNCHRONIZATIONS="[
 
 I observed that Oracle Internet Directory returns attribute names in lower case,
 OpenLdap Server may return attribute names in camel case.
-ldapsync internally converts all attribute names to lowercase.
+ldapsync internally converts attribute names to lowercase.
 That simplifies filtering attributes by name and comparing lists of attributes.
