@@ -21,3 +21,9 @@ rstest = "0.18"
 
 # "sudo apt install slapd" because OpenLDAP server is needed
 ldap-test-server = "0.0"
+
+[profile.release]
+strip = true  # strip symbols from the binary. Reduziert um einige Mega-Bytes.
+#lto = true # Enable Link Time Optimization. Spart nur einige hundert Kilo-Bytes. Linken dauert länger.
+#codegen-units = 1 # Spart nur 200 Klio-Bytes. lohnt kaum.
+#opt-level = "z"  # Optimize for size. lohnt sich kaum
