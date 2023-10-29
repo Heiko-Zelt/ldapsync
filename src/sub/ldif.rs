@@ -7,24 +7,27 @@ use std::str::Lines;
 pub enum ParseLdifError {
     LineNotMatched, // todo add line number and line as string
     MissingDN, // todo add line number and line as string
-    // todo SecondDN
+    SecondDN // todo add line number and line as string
 }
 
 /// A LDIF parser using stream processing,
 /// reading input lines and emitting SearchEntries.
 pub struct LdifParser<'a> {
     ldif_lines_iter: Lines<'a>,
-    empty_line_regex: Regex,
+    dn_line_regex: Regex,
     attr_line_regex: Regex,
-    // todo comment_line_regex
+    empty_line_regex: Regex,
+    comment_line_regex: Regex
 }
 
 impl LdifParser<'_> {
     pub fn from_lines(ldif_lines_iter: Lines) -> LdifParser {
         let parser = LdifParser {
             ldif_lines_iter: ldif_lines_iter,
-            empty_line_regex: Regex::new("^[ ]*$").unwrap(),
+            dn_line_regex: Regex::new("^dn: (.*)$").unwrap(),
             attr_line_regex: Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap(),
+            empty_line_regex: Regex::new("^[ ]*$").unwrap(),
+            comment_line_regex: Regex::new("^#").unwrap()
         };
         parser
     }
@@ -34,13 +37,13 @@ impl Iterator for LdifParser<'_> {
     type Item = Result<SearchEntry, ParseLdifError>;
 
     /// parses input lines like an AWK script.
+    /// 
     /// todo line wraps
-    /// todo base64 encoded dns and values
+    /// todo base64 encoded DNs and values
     /// todo binary (not valid utf8) values
-    /// todo comment lines starting with '#'
     /// todo extract into an own crate
-    /// todo case of attribute names
-    /// todo maybe check if DN attribute exists
+    /// todo multiple cases of attribute names
+    /// todo maybe check if DN attribute exists ("o" for organization)
     fn next(&mut self) -> Option<Self::Item> {
         let mut entry = SearchEntry {
             dn: "".to_string(),
@@ -55,17 +58,21 @@ impl Iterator for LdifParser<'_> {
             let ldif_line = self.ldif_lines_iter.next();
             match ldif_line {
                 Some(line) => {
-                    let empty_line_captures = self.empty_line_regex.captures(line);
-                    match empty_line_captures {
-                        Some(_) => {
+
+                    let dn_line_captures = self.dn_line_regex.captures(line);
+                    match dn_line_captures {
+                        Some(caps) => {
                             if inside_entry {
-                                // Ende eines Eintrages erreicht
-                                return Some(Ok(entry));
-                            };
-                            continue;
+                                return Some(Err(ParseLdifError::SecondDN));
+                            } else {
+                                entry.dn = caps.get(1).unwrap().as_str().to_string();
+                                inside_entry = true;
+                                continue;
+                            }
                         }
                         None => {}
                     };
+
                     let attr_line_captures = self.attr_line_regex.captures(line);
                     match attr_line_captures {
                         Some(caps) => {
@@ -84,15 +91,30 @@ impl Iterator for LdifParser<'_> {
                                         entry.attrs.insert(attr_name.to_string(), vec![attr_value]);
                                     }
                                 }
+                                continue;
                             } else {
-                                // erstes Attribut = DN
-                                if attr_name == "dn" {
-                                    entry.dn = attr_value;
-                                } else {
-                                    return Some(Err(ParseLdifError::MissingDN))
-                                }
-                                inside_entry = true
+                                return Some(Err(ParseLdifError::MissingDN));
                             }
+                        },
+                        None => {}
+                    };
+
+                    let empty_line_captures = self.empty_line_regex.captures(line);
+                    match empty_line_captures {
+                        Some(_) => {
+                            if inside_entry {
+                                // Ende eines Eintrages erreicht
+                                return Some(Ok(entry));
+                            } else {
+                                continue;
+                            }
+                        }
+                        None => {}
+                    };
+
+                    let comment_line_captures = self.comment_line_regex.captures(line);
+                    match comment_line_captures {
+                        Some(_) => {
                             continue;
                         }
                         None => {}
@@ -217,5 +239,35 @@ pub mod test {
             assert!(obj_class.contains(&"organizationalUnit".to_string()));
             assert!(ou.contains(&"unit".to_string()));
         }
+    }
+
+    #[test]
+    fn test_parse_ldif_with_comments() {
+        let ldif_str = indoc! { "
+            # This is a comment
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            #this line should also be ignored
+            o: Test Org
+            dc: test"
+        };
+        let entries = parse_ldif(ldif_str).unwrap();
+        print!("entries: {:?}", entries);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.dn, "dc=test");
+        let attrs = &entry.attrs;
+        assert_eq!(attrs.len(), 3);
+        let obj_class = attrs.get("objectclass").unwrap();
+        let o = attrs.get("o").unwrap();
+        let dc = attrs.get("dc").unwrap();
+        assert_eq!(obj_class.len(), 2);
+        assert_eq!(o.len(), 1);
+        assert_eq!(dc.len(), 1);
+        assert!(obj_class.contains(&"dcObject".to_string()));
+        assert!(obj_class.contains(&"organization".to_string()));
+        assert!(o.contains(&"Test Org".to_string()));
+        assert!(dc.contains(&"test".to_string()));
     }
 }
