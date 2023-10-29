@@ -1,6 +1,6 @@
 use chrono::{Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapError, LdapResult, Mod, Scope, SearchEntry};
-use log::{debug, info};
+use log::{debug, info, warn};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
@@ -305,6 +305,9 @@ impl<'a> Synchronization<'a> {
         dry_run: bool,
     ) -> Result<bool, LdapError> {
         debug!("source entry: {:?}", source_search_entry);
+        if source_search_entry.bin_attrs.len() != 0 {
+            warn!("Ignoring attribute(s) with binary value in source entry: {:?}", source_search_entry);
+        }
 
         let mut trunc_dn = source_search_entry.dn.clone();
         truncate_dn(&mut trunc_dn, source_base_dn_len);
@@ -313,6 +316,9 @@ impl<'a> Synchronization<'a> {
             search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await?;
         match target_search_entry {
             Some(entry) => {
+                if entry.bin_attrs.len() != 0 {
+                    warn!("Ignoring attribute(s) with binary value in target entry: {:?}", entry);
+                }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
                 if !dry_run {
                     target_ldap.modify(&target_dn, mods).await?;
@@ -342,16 +348,17 @@ impl<'a> Synchronization<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sub::ldap_utils::test::start_test_server;
+    use crate::sub::ldap_utils::simple_connect;
+    use crate::sub::ldap_utils::test::{start_test_server, search_all, parse_search_entries, assert_vec_search_entries_eq};
     use crate::sub::synchronization_config::SynchronizationConfig;
     use indoc::*;
+  
 
     #[tokio::test]
     async fn test_sync_modified() {
         let _ = env_logger::try_init();
 
         let source_plain_port = 13389;
-        let source_tls_port = 13636;
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=test".to_string();
         let source_password = "secret".to_string();
@@ -397,7 +404,6 @@ mod test {
         };
 
         let target_plain_port = 14389;
-        let target_tls_port = 14636;
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=test".to_string();
         let target_password = "secret".to_string();
@@ -438,14 +444,12 @@ mod test {
 
         let _source_server = start_test_server(
             source_plain_port,
-            source_tls_port,
             &source_base_dn,
             source_content,
         )
         .await;
         let _target_server = start_test_server(
             target_plain_port,
-            target_tls_port,
             &target_base_dn,
             target_content,
         )
@@ -489,13 +493,14 @@ mod test {
         // todo assert_eq 3 oder 4 inklusive cn=Users?
     }
 
+
+    /// todo write LDIF parser for unit tests !!!!! JSON is to big
     #[tokio::test]
     async fn test_sync_delete() {
         //env_logger::init();
         let _ = env_logger::try_init();
 
         let source_plain_port = 15389;
-        let source_tls_port = 15636;
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=source".to_string();
         let source_password = "secret".to_string();
@@ -530,7 +535,6 @@ mod test {
         };
 
         let target_plain_port = 16389;
-        let target_tls_port = 16636;
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=target".to_string();
         let target_password = "secret".to_string();
@@ -571,14 +575,12 @@ mod test {
 
         let _source_server = start_test_server(
             source_plain_port,
-            source_tls_port,
             &source_base_dn,
             source_content,
         )
         .await;
         let _target_server = start_test_server(
             target_plain_port,
-            target_tls_port,
             &target_base_dn,
             target_content,
         )
@@ -601,6 +603,98 @@ mod test {
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
 
+        let expected_source_entries_json = indoc!{ r#"
+            [
+                {
+                    "dn": "dc=source",
+                    "attrs": {
+                        "objectClass": ["dcObject", "organization"],
+                        "dc": ["source"],
+                        "o": ["Source Org"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "cn=admin,dc=source",
+                    "attrs": {
+                        "userPassword": ["secret"],
+                        "sn": ["Admin"],
+                        "objectClass": ["inetOrgPerson"],
+                        "cn": ["admin"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "ou=Users,dc=source",
+                    "attrs": {
+                        "ou": ["Users"],
+                        "objectClass": ["top", "organizationalUnit"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "o=de,ou=Users,dc=source",
+                    "attrs": {
+                        "objectClass": ["top", "organization"],
+                        "o": ["de"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "o=ABC,o=de,ou=Users,dc=source",
+                    "attrs": {
+                        "objectClass": ["top", "organization"],
+                        "o": ["ABC"]
+                    },
+                    "bin_attrs": {}
+                }
+            ]"#
+        };
+
+        let expected_target_entries_json = indoc!{ r#"
+            [
+                {
+                    "dn": "dc=target",
+                    "attrs": {
+                        "o": ["Target Org"],
+                        "dc": ["target"],
+                        "objectClass": ["dcObject", "organization"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "cn=admin,dc=target",
+                    "attrs": {
+                        "sn": ["Admin"],
+                        "objectClass": ["inetOrgPerson"],
+                        "userPassword": ["secret"],
+                        "cn": ["admin"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "ou=Users,dc=target",
+                    "attrs": {
+                        "objectClass": ["top", "organizationalUnit"],
+                        "ou": ["Users"]
+                    },
+                    "bin_attrs": {}
+                },
+                {
+                    "dn": "o=de,ou=Users,dc=target",
+                    "attrs": {
+                        "objectClass": ["top", "organization"],
+                        "o": ["de"]
+                    },
+                    "bin_attrs": {}
+                }
+            ]"#
+        };
+
+        let expected_source_entries = parse_search_entries(expected_source_entries_json);
+        let expected_target_entries = parse_search_entries(expected_target_entries_json);
+
+
         let result = Synchronization::sync_delete(
             &mut source_ldap,
             &mut target_ldap,
@@ -609,11 +703,19 @@ mod test {
             "ou=Users",
             false,
         )
-        .await;
-        // todo assertions: compare norm DNs of subtrees
+        .await.unwrap();
+        
 
         info!("result: {:?}", result);
-        assert_eq!(result.unwrap(), 2);
+        assert_eq!(result, 2);
+
+        let source_search_entries = search_all(&mut source_ldap, &source_base_dn).await.unwrap();
+        debug!("source entries {:?}", source_search_entries);
+        assert_vec_search_entries_eq(&source_search_entries, &expected_source_entries);
+
+        let target_search_entries = search_all(&mut target_ldap, &target_base_dn).await.unwrap();
+        debug!("target entries {:?}", target_search_entries);
+        assert_vec_search_entries_eq(&target_search_entries, &expected_target_entries);
     }
 
     #[tokio::test]
@@ -622,7 +724,6 @@ mod test {
 
         let ts_store_name = "ldap1".to_string();
         let ts_store_plain_port = 20389;
-        let ts_store_tls_port = 20636;
         let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
         let ts_store_bind_dn = "cn=admin,dc=test".to_string();
         let ts_store_password = "secret".to_string();
@@ -660,7 +761,6 @@ mod test {
 
         let _ts_store_server = start_test_server(
             ts_store_plain_port,
-            ts_store_tls_port,
             &ts_store_base_dn,
             ts_store_content,
         )
@@ -711,7 +811,6 @@ mod test {
         let sync_timestamp = "20231025235959Z";
         let ts_store_name = "ldap1".to_string();
         let ts_store_plain_port = 19389;
-        let ts_store_tls_port = 19636;
         let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
         let ts_store_bind_dn = "cn=admin,dc=test".to_string();
         let ts_store_password = "secret".to_string();
@@ -749,7 +848,6 @@ mod test {
 
         let _ts_store_server = start_test_server(
             ts_store_plain_port,
-            ts_store_tls_port,
             &ts_store_base_dn,
             ts_store_content,
         )
@@ -797,7 +895,6 @@ mod test {
         let _ = env_logger::try_init();
 
         let source_plain_port = 22389;
-        let source_tls_port = 22636;
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=test".to_string();
         let source_password = "secret".to_string();
@@ -843,7 +940,6 @@ mod test {
         };
 
         let target_plain_port = 14389;
-        let target_tls_port = 14636;
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=test".to_string();
         let target_password = "secret".to_string();
@@ -892,14 +988,12 @@ mod test {
 
         let _source_server = start_test_server(
             source_plain_port,
-            source_tls_port,
             &source_base_dn,
             source_content,
         )
         .await;
         let _target_server = start_test_server(
             target_plain_port,
-            target_tls_port,
             &target_base_dn,
             target_content,
         )

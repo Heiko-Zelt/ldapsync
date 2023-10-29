@@ -14,12 +14,15 @@ but environment variables have to be set like in Cloud Foundry.
 I need this programm to synchronize Microsoft Active Directories, Oracle Internet Directories (OIDs) and OpenLDAP servers.
 It may work with other directory servers too, which implement the LDAPv3 protocol, but is not testet (yet).
 
-## Warning
+## Warnings
 
-In general you should regularily, automatically backup your data.
-But maybe before running this programm, you should manually create an additional backup.
-Even I testet this software, I cannot garantee it is free of bugs.
-If you configure it wrong, LDAP data may accidentally be deleted.
+* In general you should regularily, automatically backup your data.
+  But maybe before running this programm, you should manually create an additional backup.
+  Even I testet this software, I cannot garantee it is free of bugs.
+  If you configure it wrong, LDAP data may accidentally be deleted.
+* Attributes, which have at least one binary value (not valid UTF8) are ignored,
+  independently of attribute type. A warning message is logged.
+  I don't need binary data in our LDAP servers. So, it's no problem for me.
 
 ## Algorithm
 
