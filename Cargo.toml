@@ -23,6 +23,10 @@ base64 = "0.21"
 # "sudo apt install slapd" because OpenLDAP server is needed
 ldap-test-server = "0.0"
 
+#[[test]]
+#name = "ldif"
+
+
 [profile.release]
 strip = true  # strip symbols from the binary. Reduziert um einige Mega-Bytes.
 #lto = true # Enable Link Time Optimization. Spart nur einige hundert Kilo-Bytes. Linken dauert länger.

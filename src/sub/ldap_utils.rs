@@ -47,14 +47,6 @@ pub fn truncate_dn(dn: &mut String, base_dn_len: usize) {
     dn.truncate(dn.len() - base_dn_len - 1); // comma auch abschneiden
 }
 
-/*
-pub fn simple_connect_sync(service: &LdapService) -> ldap3::result::Result<LdapConn> {
-    let mut conn = LdapConn::new(&service.url)?;
-    conn.simple_bind(&service.bind_dn, &service.password)?;
-    return Ok(conn);
-}
-*/
-
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
     ldap3::drive!(conn);
@@ -252,7 +244,7 @@ pub fn diff_attributes(
 
 #[cfg(test)]
 pub mod test {
-    use std::str::Utf8Error;
+    use crate::sub::ldif::*;
 
     use super::*;
     use indoc::*;
@@ -329,31 +321,6 @@ pub mod test {
         }
     }
 
-    #[test]
-    fn parse_bytes_as_utf8_ok() {
-        let bytes = vec![72, 105];
-        let result = std::str::from_utf8(&bytes);
-        assert_eq!(result, Ok("Hi"));
-    }
-
-    #[test]
-    fn parse_bytes_as_utf8_err() {
-        //let bytes = vec![0]; // ist ok
-        let bytes = vec![126, 190];
-        let result = std::str::from_utf8(&bytes);
-        print!("{:?}", result);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn encode_bytes() {        
-        use base64::{Engine as _, engine::general_purpose};
-        //let orig = b"data";
-        let orig = vec![126, 190]; // not utf8
-        let encoded: String = general_purpose::STANDARD.encode(orig);
-        print!("{:?}", encoded);
-    }
-
     #[rstest]
     #[case("", "", "")]
     #[case("", "dc=test", "dc=test")]
@@ -424,7 +391,7 @@ pub mod test {
             .into_iter()
             .map(|result_entry| SearchEntry::construct(result_entry.clone()))
             .collect();
-        Ok(search_entries)
+        Ok(search_entries)       
     }
 
     // todo write test for unsuccessful bind
@@ -466,7 +433,7 @@ pub mod test {
 
         //let src_base_dn = "dc=test".to_string();
         //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
-        let ldap_conn = simple_connect(&service).await.unwrap();
+        let _ldap_conn = simple_connect(&service).await.unwrap();
         //debug!("ldap conn: {:?}", ldap_conn);
     }
 
@@ -826,39 +793,31 @@ pub mod test {
     fn test_diff_attributes() {
         let _ = env_logger::try_init();
 
-        let source = HashMap::from([
-            (
-                "instruments".to_string(),
-                vec![
-                    "violin".to_string(),
-                    "clarinette".to_string(),
-                    "flute".to_string(),
-                ],
-            ),
-            ("name".to_string(), vec!["Magic Orchestra".to_string()]),
-            ("l".to_string(), vec!["Frankfurt".to_string()]),
-            (
-                "stateorprovincename".to_string(),
-                vec!["Hessen".to_string()],
-            ),
-        ]);
-        let target = HashMap::from([
-            (
-                "instruments".to_string(),
-                vec![
-                    "violin".to_string(),
-                    "clarinette".to_string(),
-                    "oboe".to_string(),
-                ],
-            ),
-            ("name".to_string(), vec!["Old Orchestra".to_string()]),
-            ("o".to_string(), vec!["Hessischer Rundfunkt".to_string()]),
-            (
-                "stateorprovincename".to_string(),
-                vec!["Hessen".to_string()],
-            ),
-        ]);
-        let result = diff_attributes(&source, &target);
+        let source_entries = parse_ldif( indoc!{"
+            dn: cn=entry,dc=test
+            cn: entry
+            instruments: violin
+            instruments: clarinette
+            instruments: flute
+            name: Magic Orchestra
+            l: Frankfurt
+            stateorprovincename: Hessen"
+        });
+
+        let target_entries = parse_ldif( indoc!{"
+            dn: cn=entry,dc=test
+            cn: entry
+            instruments: violin
+            instruments: clarinette
+            instruments: oboe
+            name: Old Orchestra
+            o: Hessischer Rundfunk
+            stateorprovincename: Hessen"
+        });
+
+        let source_attrs = &source_entries[0].attrs;
+        let target_attrs = &target_entries[0].attrs;
+        let result = diff_attributes(source_attrs, target_attrs);
         debug!("result {:?}", result);
 
         assert_eq!(result.len(), 4);
@@ -876,14 +835,4 @@ pub mod test {
         assert!(result.contains(&Mod::Replace("instruments".to_string(), instruments_set)));
         assert!(result.contains(&Mod::Replace("name".to_string(), name_set)));
     }
-
-    /*
-    #[test]
-    fn test_result_entries_to_norm_dns() {
-        let result_entry = ResultEntry { ... kompliziert ... }
-        let result_entries = vec![result_entry];
-        let result = result_entries_to_norm_dns(result_entries, &"cn=Users,cn=test");
-        assert ...
-    }
-     */
 }

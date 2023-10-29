@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// todo extract into an own crate
 /// todo Groß/Kleinschreibung
 /// todo maybe check if DN attribute exists
-fn parse_ldif(ldif_str: &str) -> Vec<SearchEntry> {
+pub fn parse_ldif(ldif_str: &str) -> Vec<SearchEntry> {
     let mut result = Vec::new();
     let empty_line_regex = Regex::new("^[ ]*$").unwrap();
     let attribute_line_regex = Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap();
@@ -90,13 +90,38 @@ pub mod test {
     use indoc::*;
 
     #[test]
+    fn parse_bytes_as_utf8_ok() {
+        let bytes = vec![72, 105];
+        let result = std::str::from_utf8(&bytes);
+        assert_eq!(result, Ok("Hi"));
+    }
+
+    #[test]
+    fn parse_bytes_as_utf8_err() {
+        //let bytes = vec![0]; // ist ok
+        let bytes = vec![126, 190];
+        let result = std::str::from_utf8(&bytes);
+        print!("{:?}", result);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encode_bytes() {        
+        use base64::{Engine as _, engine::general_purpose};
+        //let orig = b"data";
+        let orig = vec![126, 190]; // not utf8
+        let encoded: String = general_purpose::STANDARD.encode(orig);
+        print!("{:?}", encoded);
+    }
+
+    #[test]
     fn test_parse_1_ldif_entry() {
         let ldif_str = indoc! { "
-            dn: dc=test
-            objectclass: dcObject
-            objectclass: organization
-            o: Test Org
-            dc: test"
+                dn: dc=test
+                objectclass: dcObject
+                objectclass: organization
+                o: Test Org
+                dc: test"
         };
         let entries = parse_ldif(ldif_str);
         print!("entries: {:?}", entries);
@@ -120,14 +145,14 @@ pub mod test {
     #[test]
     fn test_parse_2_ldif_entries() {
         let ldif_str = indoc! { "
-            dn: o=test
-            objectclass: organization
-            o: test
-
-            dn: ou=unit,o=test
-            objectclass: organizationalUnit
-            ou: unit
-            "
+                dn: o=test
+                objectclass: organization
+                o: test
+    
+                dn: ou=unit,o=test
+                objectclass: organizationalUnit
+                ou: unit
+                "
         };
         let entries = parse_ldif(ldif_str);
         print!("entries: {:?}", entries);
