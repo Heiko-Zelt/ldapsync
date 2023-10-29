@@ -271,49 +271,52 @@ pub mod test {
         let serde_search_entries = serde_json::from_str::<Vec<SerdeSearchEntry>>(json_str).unwrap();
         let search_entries = serde_search_entries
             .into_iter()
-            .map(|serde_entry| {
-               SearchEntry {
-                  dn: serde_entry.dn,
-                  attrs: serde_entry.attrs,
-                  bin_attrs: serde_entry.bin_attrs
-               }
+            .map(|serde_entry| SearchEntry {
+                dn: serde_entry.dn,
+                attrs: serde_entry.attrs,
+                bin_attrs: serde_entry.bin_attrs,
             })
             .collect();
         search_entries
     }
 
-    pub fn assert_attrs_eq(attrs1: &HashMap<String, Vec<String>>, attrs2: &HashMap<String, Vec<String>>) {
+    pub fn assert_attrs_eq(
+        attrs1: &HashMap<String, Vec<String>>,
+        attrs2: &HashMap<String, Vec<String>>,
+    ) {
         let result = diff_attributes(&attrs1, &attrs2);
         if result.len() != 0 {
             panic!("attributes differ");
         }
     }
-    
+
     pub fn assert_search_entries_eq(entry1: &SearchEntry, entry2: &SearchEntry) {
         if entry1.dn != entry2.dn {
             panic!("dns are unequal. {} != {}", entry1.dn, entry2.dn);
         }
         assert_attrs_eq(&entry1.attrs, &entry2.attrs);
-        // todo bin_attrs        
+        // todo bin_attrs
     }
 
     pub fn assert_vec_search_entries_eq(entries1: &Vec<SearchEntry>, entries2: &Vec<SearchEntry>) {
         if entries1.len() != entries2.len() {
-            panic!("different number of entries. {} != {}", entries1.len(), entries2.len());
+            panic!(
+                "different number of entries. {} != {}",
+                entries1.len(),
+                entries2.len()
+            );
         }
         // map dn to entries
         let entries2_map: HashMap<String, SearchEntry> = entries2
-          .iter()
-          .map(|entry| {
-              (entry.dn.clone(), entry.clone())
-          })
-          .collect();
+            .iter()
+            .map(|entry| (entry.dn.clone(), entry.clone()))
+            .collect();
         for entry1 in entries1 {
             let entry2 = entries2_map.get(&entry1.dn);
             match entry2 {
                 Some(e2) => {
                     assert_search_entries_eq(entry1, e2);
-                },
+                }
                 None => {
                     panic!("entry with dn {} not found", entry1.dn);
                 }
@@ -391,7 +394,7 @@ pub mod test {
             .into_iter()
             .map(|result_entry| SearchEntry::construct(result_entry.clone()))
             .collect();
-        Ok(search_entries)       
+        Ok(search_entries)
     }
 
     // todo write test for unsuccessful bind
@@ -494,12 +497,11 @@ pub mod test {
         assert!(none_result.is_none());
     }
 
-
     #[tokio::test]
     async fn test_search_one_entry_by_dn_with_binary_value() {
         let _ = env_logger::try_init();
 
-        let plain_port = 17389;
+        let plain_port = 23389;
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -533,7 +535,8 @@ pub mod test {
         let dn = "cn=admin,dc=test";
         let entry = search_one_entry_by_dn(&mut ldap_conn, dn)
             .await
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.dn, dn);
         print!("entry: {:?}", entry);
     }
@@ -688,37 +691,37 @@ pub mod test {
         let source_password = "secret".to_string();
         let source_base_dn = "dc=test".to_string();
         let source_content = indoc! { "
-        dn: dc=test
-        objectclass: dcObject
-        objectclass: organization
-        o: Test Org
-        dc: test
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
 
-        dn: cn=admin,dc=test
-        objectClass: inetOrgPerson
-        sn: Admin
-        userPassword: secret
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
 
-        dn: ou=Users,dc=test
-        objectClass: top
-        objectClass: organizationalUnit
-        ou: Users
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
     
-        dn: o=de,ou=Users,dc=test
-        objectClass: top
-        objectClass: organization
-        o: de
+            dn: o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: de
 
-        dn: o=AB,o=de,ou=Users,dc=test
-        objectClass: top
-        objectClass: organization
-        o: AB
+            dn: o=AB,o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: AB
 
-        dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
-        objectClass: inetOrgPerson
-        sn: Müller
-        givenName: André
-        userPassword: hallowelt123!"
+            dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!"
         };
 
         let target_plain_port = 12389;
@@ -727,37 +730,37 @@ pub mod test {
         let target_password = "secret".to_string();
         let target_base_dn = "dc=test".to_string();
         let target_content = indoc! { "
-        dn: dc=test
-        objectclass: dcObject
-        objectclass: organization
-        o: Test Org
-        dc: test
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
 
-        dn: cn=admin,dc=test
-        objectClass: inetOrgPerson
-        sn: Admin
-        userPassword: secret
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
 
-        dn: ou=Users,dc=test
-        objectClass: top
-        objectClass: organizationalUnit
-        ou: Users
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
     
-        dn: o=de,ou=Users,dc=test
-        objectClass: top
-        objectClass: organization
-        o: de
+            dn: o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: de
 
-        dn: o=XY,o=de,ou=Users,dc=test
-        objectClass: top
-        objectClass: organization
-        o: XY
+            dn: o=XY,o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: XY
 
-        dn: cn=xy012345,o=XY,o=de,ou=Users,dc=test
-        objectClass: inetOrgPerson
-        sn: Müller
-        givenName: André
-        userPassword: hallowelt123!"
+            dn: cn=xy012345,o=XY,o=de,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!"
         };
 
         let _source_server =
@@ -781,19 +784,18 @@ pub mod test {
             base_dn: target_base_dn,
         };
 
-        let source_ldap = simple_connect(&source_service).await.unwrap();
-        let target_ldap = simple_connect(&target_service).await.unwrap();
+        let _source_ldap = simple_connect(&source_service).await.unwrap();
+        let _target_ldap = simple_connect(&target_service).await.unwrap();
         //debug!("source ldap conn: {:?}", source_ldap);
         //debug!("target ldap conn: {:?}", target_ldap);
     }
-
 
     /// todo test bin_attrs
     #[test]
     fn test_diff_attributes() {
         let _ = env_logger::try_init();
 
-        let source_entries = parse_ldif( indoc!{"
+        let source_entries = parse_ldif(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -802,9 +804,10 @@ pub mod test {
             name: Magic Orchestra
             l: Frankfurt
             stateorprovincename: Hessen"
-        });
+        })
+        .unwrap();
 
-        let target_entries = parse_ldif( indoc!{"
+        let target_entries = parse_ldif(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -813,7 +816,8 @@ pub mod test {
             name: Old Orchestra
             o: Hessischer Rundfunk
             stateorprovincename: Hessen"
-        });
+        })
+        .unwrap();
 
         let source_attrs = &source_entries[0].attrs;
         let target_attrs = &target_entries[0].attrs;

@@ -1,86 +1,122 @@
 use ldap3::SearchEntry;
 use regex::Regex;
 use std::collections::HashMap;
+use std::str::Lines;
 
-/// This function is needed to provide test data in a short and sweet way.
-/// It parses input like an AWK script.
-/// todo line wraps
-/// todo base64 encoded dns and values
-/// todo binary (not valid utf8) values
-/// todo comment lines starting with '#'
-/// todo extract into an own crate
-/// todo Groß/Kleinschreibung
-/// todo maybe check if DN attribute exists
-pub fn parse_ldif(ldif_str: &str) -> Vec<SearchEntry> {
-    let mut result = Vec::new();
-    let empty_line_regex = Regex::new("^[ ]*$").unwrap();
-    let attribute_line_regex = Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap();
-    let mut inside_entry = false;
-    let mut attrs = HashMap::new();
-    let mut dn = "".to_string();
-    for line in ldif_str.lines() {
-        let empty_line_captures = empty_line_regex.captures(line);
-        let mut line_matched = false;
-        match empty_line_captures {
-            Some(_caps) => {
-                if inside_entry {
-                    // Ende eines Eintrages erreicht
-                    result.push(SearchEntry {
-                        dn: dn,
-                        attrs: attrs.clone(),
-                        bin_attrs: HashMap::new(),
-                    });
-                    dn = "".to_string(); // unnötig
-                    attrs.clear();
-                    inside_entry = false
-                }
-                line_matched = true;
-            }
-            None => {}
+#[derive(Debug)]
+pub enum ParseLdifError {
+    LineNotMatched, // todo add line number and line as string
+    MissingDN, // todo add line number and line as string
+    // todo SecondDN
+}
+
+/// A LDIF parser using stream processing,
+/// reading input lines and emitting SearchEntries.
+pub struct LdifParser<'a> {
+    ldif_lines_iter: Lines<'a>,
+    empty_line_regex: Regex,
+    attr_line_regex: Regex,
+    // todo comment_line_regex
+}
+
+impl LdifParser<'_> {
+    pub fn from_lines(ldif_lines_iter: Lines) -> LdifParser {
+        let parser = LdifParser {
+            ldif_lines_iter: ldif_lines_iter,
+            empty_line_regex: Regex::new("^[ ]*$").unwrap(),
+            attr_line_regex: Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap(),
         };
-        let attribute_line_captures = attribute_line_regex.captures(line);
-        match attribute_line_captures {
-            Some(caps) => {
-                let attr_name = caps.get(1).unwrap().as_str();
-                let attr_value = caps.get(2).unwrap().as_str().to_string();
-                if inside_entry {
-                    // ein weiteres Attribut
-                    let attr = attrs.get_mut(attr_name);
-                    match attr {
-                        Some(a) => {
-                            // weiterer Wert
-                            a.push(attr_value);
+        parser
+    }
+}
+
+impl Iterator for LdifParser<'_> {
+    type Item = Result<SearchEntry, ParseLdifError>;
+
+    /// parses input lines like an AWK script.
+    /// todo line wraps
+    /// todo base64 encoded dns and values
+    /// todo binary (not valid utf8) values
+    /// todo comment lines starting with '#'
+    /// todo extract into an own crate
+    /// todo case of attribute names
+    /// todo maybe check if DN attribute exists
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut entry = SearchEntry {
+            dn: "".to_string(),
+            attrs: HashMap::new(),
+            bin_attrs: HashMap::new(),
+        };
+        
+        // state: inside entry (list of attributes) or between entries (empty lines)
+        let mut inside_entry = false;
+
+        loop {
+            let ldif_line = self.ldif_lines_iter.next();
+            match ldif_line {
+                Some(line) => {
+                    let empty_line_captures = self.empty_line_regex.captures(line);
+                    match empty_line_captures {
+                        Some(_) => {
+                            if inside_entry {
+                                // Ende eines Eintrages erreicht
+                                return Some(Ok(entry));
+                            };
+                            continue;
                         }
-                        None => {
-                            // erster Wert
-                            attrs.insert(attr_name.to_string(), vec![attr_value]);
+                        None => {}
+                    };
+                    let attr_line_captures = self.attr_line_regex.captures(line);
+                    match attr_line_captures {
+                        Some(caps) => {
+                            let attr_name = caps.get(1).unwrap().as_str();
+                            let attr_value = caps.get(2).unwrap().as_str().to_string();
+                            if inside_entry {
+                                // ein weiteres Attribut
+                                let attr = entry.attrs.get_mut(attr_name);
+                                match attr {
+                                    Some(a) => {
+                                        // weiterer Wert
+                                        a.push(attr_value);
+                                    }
+                                    None => {
+                                        // erster Wert
+                                        entry.attrs.insert(attr_name.to_string(), vec![attr_value]);
+                                    }
+                                }
+                            } else {
+                                // erstes Attribut = DN
+                                if attr_name == "dn" {
+                                    entry.dn = attr_value;
+                                } else {
+                                    return Some(Err(ParseLdifError::MissingDN))
+                                }
+                                inside_entry = true
+                            }
+                            continue;
                         }
-                    }
-                } else {
-                    // erstes Attribut = DN
-                    if attr_name == "dn" {
-                        dn = attr_value;
+                        None => {}
+                    };
+
+                }
+                None => {
+                    // end of file
+                    if inside_entry {
+                        // return last entry
+                        return Some(Ok(entry));
                     } else {
-                        panic!(r#"first line of LDIF entry must start with "dn: ""#)
+                        return None
                     }
-                    inside_entry = true
                 }
-                line_matched = true;
             }
-            None => {}
-        };
-        if !line_matched {
-            panic!(r#"syntax error in line "{}""#, line); // todo line number
         }
     }
-    // letzter Eintrag ohne Leerzeile danach?
-    if inside_entry {
-        result.push(SearchEntry {
-            dn: dn,
-            attrs: attrs,
-            bin_attrs: HashMap::new(),
-        });
-    }
+}
+
+
+pub fn parse_ldif(ldif_str: &str) -> Result<Vec<SearchEntry>, ParseLdifError> {
+    let parser = LdifParser::from_lines(ldif_str.lines());
+    let result = parser.collect();
     result
 }
 
@@ -117,13 +153,13 @@ pub mod test {
     #[test]
     fn test_parse_1_ldif_entry() {
         let ldif_str = indoc! { "
-                dn: dc=test
-                objectclass: dcObject
-                objectclass: organization
-                o: Test Org
-                dc: test"
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test"
         };
-        let entries = parse_ldif(ldif_str);
+        let entries = parse_ldif(ldif_str).unwrap();
         print!("entries: {:?}", entries);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
@@ -145,16 +181,16 @@ pub mod test {
     #[test]
     fn test_parse_2_ldif_entries() {
         let ldif_str = indoc! { "
-                dn: o=test
-                objectclass: organization
-                o: test
-    
-                dn: ou=unit,o=test
-                objectclass: organizationalUnit
-                ou: unit
-                "
+            dn: o=test
+            objectclass: organization
+            o: test
+
+            dn: ou=unit,o=test
+            objectclass: organizationalUnit
+            ou: unit
+            "
         };
-        let entries = parse_ldif(ldif_str);
+        let entries = parse_ldif(ldif_str).unwrap();
         print!("entries: {:?}", entries);
         assert_eq!(entries.len(), 2);
         {

@@ -403,7 +403,7 @@ mod test {
             modifyTimestamp: 20231019182739Z"
         };
 
-        let target_plain_port = 14389;
+        let target_plain_port = 24389;
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=test".to_string();
         let target_password = "secret".to_string();
