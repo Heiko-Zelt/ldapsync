@@ -12,6 +12,7 @@ pub enum ParseLdifError {
 
 /// A LDIF parser using stream processing,
 /// reading input lines and emitting SearchEntries.
+/// Only for imports/exports, not "changetype: modify".
 pub struct LdifParser<'a> {
     ldif_lines_iter: Lines<'a>,
     dn_line_regex: Regex,
@@ -30,6 +31,25 @@ impl LdifParser<'_> {
             comment_line_regex: Regex::new("^#").unwrap()
         };
         parser
+    }
+
+    pub fn from_str(s: &str) -> LdifParser {
+        Self::from_lines(s.lines())
+    }
+
+    pub fn collect_to_vec(&mut self) -> Result<Vec<SearchEntry>, ParseLdifError> {
+        let mut v: Vec<SearchEntry> = Vec::new();
+        for result in self {
+            match result {
+                Ok(entry) => {
+                    v.push(entry);
+                }
+                Err(err) => {
+                    return Err(err);
+                }
+            }
+        };
+        Ok(v)
     }
 }
 

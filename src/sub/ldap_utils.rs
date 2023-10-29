@@ -286,7 +286,7 @@ pub mod test {
     ) {
         let result = diff_attributes(&attrs1, &attrs2);
         if result.len() != 0 {
-            panic!("attributes differ");
+            panic!("attr1: {:?}, attrs2: {:?}, diff: {:?}", attrs1, attrs2, result);
         }
     }
 
@@ -610,7 +610,6 @@ pub mod test {
     #[tokio::test]
     async fn test_search_modified_entries_attrs_filtered() {
         let _ = env_logger::try_init();
-
         let plain_port = 21389;
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
@@ -648,19 +647,22 @@ pub mod test {
             userPassword: welt123!
             modifyTimestamp: 20220101235959Z"
         };
-
         let service = LdapService {
             url: url,
             bind_dn: bind_dn,
             password: password,
             base_dn: base_dn.clone(),
         };
-
         let _server = start_test_server(plain_port, &base_dn, content).await;
-
         let mut ldap_conn = simple_connect(&service).await.unwrap();
-
         let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
+        let mut expected_entries_parser = LdifParser::from_str(indoc!{"
+            dn: cn=new012345,ou=Users,dc=test
+            objectclass: inetOrgPerson
+            givenname: Amira
+            userpassword: welt123!"
+        });
+        let expected_entries = expected_entries_parser.collect_to_vec().unwrap();
 
         let search_entries = search_modified_entries_attrs_filtered(
             &mut ldap_conn,
@@ -670,6 +672,8 @@ pub mod test {
         )
         .await
         .unwrap();
+
+        assert_vec_search_entries_eq(&search_entries, &expected_entries);
 
         assert_eq!(search_entries.len(), 1);
         let attrs = &search_entries[0].attrs;
@@ -710,18 +714,7 @@ pub mod test {
             dn: o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
-            o: de
-
-            dn: o=AB,o=de,ou=Users,dc=test
-            objectClass: top
-            objectClass: organization
-            o: AB
-
-            dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
-            objectClass: inetOrgPerson
-            sn: Müller
-            givenName: André
-            userPassword: hallowelt123!"
+            o: de"
         };
 
         let target_plain_port = 12389;
@@ -749,18 +742,7 @@ pub mod test {
             dn: o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
-            o: de
-
-            dn: o=XY,o=de,ou=Users,dc=test
-            objectClass: top
-            objectClass: organization
-            o: XY
-
-            dn: cn=xy012345,o=XY,o=de,ou=Users,dc=test
-            objectClass: inetOrgPerson
-            sn: Müller
-            givenName: André
-            userPassword: hallowelt123!"
+            o: de"
         };
 
         let _source_server =
@@ -794,8 +776,7 @@ pub mod test {
     #[test]
     fn test_diff_attributes() {
         let _ = env_logger::try_init();
-
-        let source_entries = parse_ldif(indoc! {"
+        let mut source_entries = LdifParser::from_str(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -804,10 +785,8 @@ pub mod test {
             name: Magic Orchestra
             l: Frankfurt
             stateorprovincename: Hessen"
-        })
-        .unwrap();
-
-        let target_entries = parse_ldif(indoc! {"
+        });
+        let mut target_entries = LdifParser::from_str(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -816,14 +795,13 @@ pub mod test {
             name: Old Orchestra
             o: Hessischer Rundfunk
             stateorprovincename: Hessen"
-        })
-        .unwrap();
+        });
+        let source_attrs = &source_entries.next().unwrap().unwrap().attrs;
+        let target_attrs = &target_entries.next().unwrap().unwrap().attrs;
 
-        let source_attrs = &source_entries[0].attrs;
-        let target_attrs = &target_entries[0].attrs;
         let result = diff_attributes(source_attrs, target_attrs);
-        debug!("result {:?}", result);
 
+        debug!("result {:?}", result);
         assert_eq!(result.len(), 4);
         let empty_set = HashSet::new();
         let location_set = HashSet::from(["Frankfurt".to_string()]);
@@ -833,7 +811,6 @@ pub mod test {
             "flute".to_string(),
         ]);
         let name_set = HashSet::from(["Magic Orchestra".to_string()]);
-
         assert!(result.contains(&Mod::Delete("o".to_string(), empty_set)));
         assert!(result.contains(&Mod::Add("l".to_string(), location_set)));
         assert!(result.contains(&Mod::Replace("instruments".to_string(), instruments_set)));

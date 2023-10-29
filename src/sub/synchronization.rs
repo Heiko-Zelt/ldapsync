@@ -394,7 +394,7 @@ mod test {
             objectClass: organization
             o: AB
             modifyTimestamp: 20231019182738Z
-
+            
             dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
             objectClass: inetOrgPerson
             sn: Müller
@@ -494,7 +494,6 @@ mod test {
     }
 
 
-    /// todo write LDIF parser for unit tests !!!!! JSON is to big
     #[tokio::test]
     async fn test_sync_delete() {
         //env_logger::init();
