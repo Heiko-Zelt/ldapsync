@@ -2,19 +2,27 @@ use ldap3::SearchEntry;
 use regex::Regex;
 use std::collections::HashMap;
 use std::str::Lines;
+use std::iter::Enumerate;
 
-#[derive(Debug)]
-pub enum ParseLdifError {
+#[derive(Debug, PartialEq)]
+pub enum ParseLdifErrorType {
     LineNotMatched, // todo add line number and line as string
     MissingDN, // todo add line number and line as string
     SecondDN // todo add line number and line as string
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ParseLdifError {
+    pub line_num: usize,
+    pub line: String,
+    pub error_type: ParseLdifErrorType
 }
 
 /// A LDIF parser using stream processing,
 /// reading input lines and emitting SearchEntries.
 /// Only for imports/exports, not "changetype: modify".
 pub struct LdifParser<'a> {
-    ldif_lines_iter: Lines<'a>,
+    ldif_lines_iter: Enumerate<Lines<'a>>,
     dn_line_regex: Regex,
     attr_line_regex: Regex,
     empty_line_regex: Regex,
@@ -24,7 +32,7 @@ pub struct LdifParser<'a> {
 impl LdifParser<'_> {
     pub fn from_lines(ldif_lines_iter: Lines) -> LdifParser {
         let parser = LdifParser {
-            ldif_lines_iter: ldif_lines_iter,
+            ldif_lines_iter: ldif_lines_iter.enumerate(),
             dn_line_regex: Regex::new("^dn: (.*)$").unwrap(),
             attr_line_regex: Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap(),
             empty_line_regex: Regex::new("^[ ]*$").unwrap(),
@@ -77,13 +85,17 @@ impl Iterator for LdifParser<'_> {
         loop {
             let ldif_line = self.ldif_lines_iter.next();
             match ldif_line {
-                Some(line) => {
+                Some((line_num, line)) => {
 
                     let dn_line_captures = self.dn_line_regex.captures(line);
                     match dn_line_captures {
                         Some(caps) => {
                             if inside_entry {
-                                return Some(Err(ParseLdifError::SecondDN));
+                                return Some(Err(ParseLdifError {
+                                    line_num: line_num,
+                                    line: line.to_string(),
+                                    error_type: ParseLdifErrorType::SecondDN
+                                }));
                             } else {
                                 entry.dn = caps.get(1).unwrap().as_str().to_string();
                                 inside_entry = true;
@@ -113,7 +125,11 @@ impl Iterator for LdifParser<'_> {
                                 }
                                 continue;
                             } else {
-                                return Some(Err(ParseLdifError::MissingDN));
+                                return Some(Err(ParseLdifError {
+                                    line_num: line_num,
+                                    line: line.to_string(),
+                                    error_type: ParseLdifErrorType::MissingDN
+                                }));
                             }
                         },
                         None => {}
@@ -139,6 +155,12 @@ impl Iterator for LdifParser<'_> {
                         }
                         None => {}
                     };
+
+                    return Some(Err(ParseLdifError {
+                        line_num: line_num,
+                        line: line.to_string(),
+                        error_type: ParseLdifErrorType::LineNotMatched
+                    }));
 
                 }
                 None => {
@@ -289,5 +311,54 @@ pub mod test {
         assert!(obj_class.contains(&"organization".to_string()));
         assert!(o.contains(&"Test Org".to_string()));
         assert!(dc.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_parse_ldif_without_dn() {
+        let ldif_str = indoc! { "
+            objectclass: organization
+            o: Test Org"
+        };
+        let expected_err = ParseLdifError {
+            line_num: 0,
+            line: "objectclass: organization".to_string(),
+            error_type: ParseLdifErrorType::MissingDN
+        };
+        let err_result = parse_ldif(ldif_str).err().unwrap();
+        assert_eq!(err_result, expected_err);
+    }
+
+    #[test]
+    fn test_parse_ldif_second_dn() {
+        let ldif_str = indoc! { "
+            dn: o=Test Org
+            objectclass: organization
+            o: Test Org
+            dn: wrong"
+        };
+        let expected_err = ParseLdifError {
+            line_num: 3,
+            line: "dn: wrong".to_string(),
+            error_type: ParseLdifErrorType::SecondDN
+        };
+        let err_result = parse_ldif(ldif_str).err().unwrap();
+        assert_eq!(err_result, expected_err);
+    }
+
+    #[test]
+    fn test_parse_ldif_line_not_matched() {
+        let ldif_str = indoc! { "
+            dn: o=Test Org
+            objectclass: organization
+            # missing space after colon
+            o:Test Org"
+        };
+        let expected_err = ParseLdifError {
+            line_num: 3,
+            line: "o:Test Org".to_string(),
+            error_type: ParseLdifErrorType::LineNotMatched
+        };
+        let err_result = parse_ldif(ldif_str).err().unwrap();
+        assert_eq!(err_result, expected_err);
     }
 }
