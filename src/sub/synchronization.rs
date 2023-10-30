@@ -185,8 +185,7 @@ impl<'a> Synchronization<'a> {
         sync_dn: &str,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
-        info!("sync_delete(source_ldap: {:?}, target_ldap: {:?}, source_base_dn: {:?}, target_base_dn: {:?}, sync_dn: {:?})",
-     source_ldap, target_ldap, source_base_dn, target_base_dn, sync_dn);
+        info!("sync_delete(source_base_dn: {:?}, target_base_dn: {:?}, sync_dn: {:?})", source_base_dn, target_base_dn, sync_dn);
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
         let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn).await?;
@@ -207,7 +206,7 @@ impl<'a> Synchronization<'a> {
                 // norm_dn ends with a comma if it is not empty
                 //let target_dn = format!("{}{}", norm_dn, target.base_dn);
                 let target_dn = join_3_dns(dn, sync_dn, target_base_dn);
-                info!("deleting: {}", target_dn);
+                info!(r#"deleting: "{}""#, target_dn);
                 if !dry_run {
                     target_ldap.delete(&target_dn).await?;
                 }
@@ -304,7 +303,8 @@ impl<'a> Synchronization<'a> {
         exclude_attrs: &Regex,
         dry_run: bool,
     ) -> Result<bool, LdapError> {
-        debug!("source entry: {:?}", source_search_entry);
+        // todo dont log userPassword!
+        debug!("sync_modify_one_entry(source entry: {:?})", source_search_entry);
         if source_search_entry.bin_attrs.len() != 0 {
             warn!("Ignoring attribute(s) with binary value in source entry: {:?}", source_search_entry);
         }
@@ -314,18 +314,24 @@ impl<'a> Synchronization<'a> {
         let target_dn = join_2_dns(&trunc_dn, target_base_dn);
         let target_search_entry =
             search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await?;
-        match target_search_entry {
+        match &target_search_entry {
             Some(entry) => {
+                // todo dont log userPassword!
+                debug!("target entry exists: {:?})", &entry);
                 if entry.bin_attrs.len() != 0 {
                     warn!("Ignoring attribute(s) with binary value in target entry: {:?}", entry);
                 }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
-                if !dry_run {
+                // todo dont log the userPassword value as part of modifications!
+                info!("modifications: {:?}", mods);
+                // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
+                if !dry_run && !mods.is_empty() {
                     target_ldap.modify(&target_dn, mods).await?;
                 }
                 Ok(true)
             }
             None => {
+                debug!("target entry did not exist");
                 // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
                 let target_attrs = source_search_entry
                     .attrs
@@ -671,10 +677,12 @@ mod test {
         assert_eq!(result, 2);
 
         let source_search_entries = search_all(&mut source_ldap, &source_base_dn).await.unwrap();
+        // todo dont log userPassword!
         debug!("source entries {:?}", source_search_entries);
         assert_vec_search_entries_eq(&source_search_entries, &expected_source_entries);
 
         let target_search_entries = search_all(&mut target_ldap, &target_base_dn).await.unwrap();
+        // todo dont log userPassword!
         debug!("target entries {:?}", target_search_entries);
         assert_vec_search_entries_eq(&target_search_entries, &expected_target_entries);
     }
@@ -842,8 +850,7 @@ mod test {
         let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();
         debug!("use service: {:?}", &service_to_use);
         let mut ts_store_ldap = simple_connect(service_to_use).await.unwrap();
-
-        debug!("ts_store_ldap: {:?}", ts_store_ldap);
+        
         let result = synchronisation
             .save_sync_timestamp(&mut ts_store_ldap, sync_timestamp)
             .await;
@@ -880,12 +887,20 @@ mod test {
             objectClass: organizationalUnit
             ou: Users
             modifyTimestamp: 20231019182736Z
+            description: add this
     
             dn: o=de,ou=Users,dc=test
-            objectClass: top
-            objectClass: organization
+            objEctClass: top
+            ObjectClass: organization
             o: de
             modifyTimestamp: 20231019182737Z
+
+            # unchanged
+            dn: cn=un012345,o=de,ou=Users,dc=test
+            ObjectClass: inetOrgPerson
+            cn: un012345
+            modifyTimestamp: 19770101131313Z
+            sn: von Stein
 
             # to be added
             dn: o=AB,o=de,ou=Users,dc=test
@@ -925,7 +940,7 @@ mod test {
             objectClass: organization
             objectClass: extensibleObject
             o: sync_timestamps
-            name: 19751129000000Z
+            name: 19801129000000Z
     
             # to be modified
             dn: ou=Users,dc=test
@@ -933,11 +948,18 @@ mod test {
             objectClass: organizationalUnit
             ou: Users
         
-            # to be modified
+            # unchanged
+            dn: cn=un012345,o=de,ou=Users,dc=test
+            objEctClass: inetOrgPerson
+            cn: un012345
+            sn: von Stein
+
+            # unchanged
             dn: o=de,ou=Users,dc=test
-            objectClass: top
+            ObjectClass: top
             objectClass: organization
             o: de
+            descriPtion: remove this
 
             # to be deleted
             dn: o=XY,o=de,ou=Users,dc=test
@@ -979,7 +1001,8 @@ mod test {
             # modified
             dn: ou=Users,dc=test
             objectClass: top
-            objectClass: organizationalUnit
+            Description: add this
+            objectCLASS: organizationalUnit
             ou: Users
     
             # modified
@@ -987,6 +1010,12 @@ mod test {
             objectClass: top
             objectClass: organization
             o: de
+
+            # unchanged
+            dn: cn=un012345,o=de,ou=Users,dc=test
+            OBJECTClass: inetOrgPerson
+            cn: un012345
+            SN: von Stein
 
             # added
             dn: o=AB,o=de,ou=Users,dc=test

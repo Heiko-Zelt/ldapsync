@@ -93,7 +93,8 @@ pub struct ParseLdifError {
 
 /// A LDIF parser using stream processing,
 /// reading input lines and emitting SearchEntries.
-/// Only for imports, not "changetype: modify".
+/// Only for ldif-content (imports), not ldif-changes ("changetype: modify").
+/// see: RfC 2849
 pub struct LdifParser<'a> {
     ldif_lines_iter: Enumerate<Lines<'a>>,
     dn_line_regex: Regex,
@@ -198,6 +199,7 @@ impl Iterator for LdifParser<'_> {
     /// todo line wraps
     /// todo extract into an own crate
     /// todo multiple cases of attribute names
+    /// todo first line with version number
     fn next(&mut self) -> Option<Self::Item> {
         let mut entry = DirectoryEntry {
             dn: "".to_string(),

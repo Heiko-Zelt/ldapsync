@@ -82,6 +82,7 @@ pub async fn search_norm_dns(
     ldap_conn: &mut Ldap,
     base_dn: &str,
 ) -> Result<HashSet<String>, LdapError> {
+    debug!(r#"search for DNs from base: "{}""#, base_dn);
     let search_result = ldap_conn
         .search(base_dn, Scope::Subtree, "(objectClass=*)", vec!["dn"])
         .await?;
@@ -94,7 +95,7 @@ pub async fn search_norm_dns(
     */
 
     let result_entries = search_result.0;
-    info!("number of entries: {}", result_entries.len());
+    info!("found number of entries: {}", result_entries.len());
     let norm_dns = result_entries_to_norm_dns(&result_entries, base_dn);
     Ok(norm_dns)
 }
@@ -104,11 +105,12 @@ pub async fn search_one_entry_by_dn(
     ldap_conn: &mut Ldap,
     dn: &str,
 ) -> Result<Option<SearchEntry>, LdapError> {
+    debug!(r#"search entry by dn: "{}""#, dn);
     let search_result = ldap_conn
         .search(dn, Scope::Base, "(objectClass=*)", vec!["*"])
         .await?;
     let result_entries = search_result.0;
-    info!("number of entries: {}", result_entries.len()); // should be 0 or 1
+    debug!("found number of entries: {}", result_entries.len()); // should be 0 or 1
     match result_entries.len() {
         0 => Ok(None),
         1 => {
@@ -182,7 +184,7 @@ pub async fn search_modified_entries_attrs_filtered(
     exclude_attrs: &Regex,
 ) -> Result<Vec<SearchEntry>, LdapError> {
     let filter = format!("(modifyTimestamp>={})", old_modify_timestamp);
-    debug!("search with base: {}, filter: {}", base_dn, filter);
+    debug!(r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}""#, base_dn, filter);
     let mut search_result_stream = ldap
         .streaming_search(&base_dn, Scope::Subtree, &filter, vec!["*"])
         .await?;
