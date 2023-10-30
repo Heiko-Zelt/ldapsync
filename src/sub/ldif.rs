@@ -48,7 +48,9 @@ impl DirectoryEntry {
         for (attr_name, attr_values) in self.attrs.iter() {
             if is_any_binary(&attr_values) {
                 let binary_values = map_values_to_bytes(&attr_values);
-                search_entry.bin_attrs.insert(attr_name.clone(), binary_values);
+                search_entry
+                    .bin_attrs
+                    .insert(attr_name.clone(), binary_values);
             } else {
                 let text_values = map_values_to_strings(&attr_values);
                 search_entry.attrs.insert(attr_name.clone(), text_values);
@@ -175,11 +177,10 @@ impl LdifParser<'_> {
 impl Iterator for LdifParser<'_> {
     type Item = Result<DirectoryEntry, ParseLdifError>;
 
-    /// parses input lines like an AWK script.
+    /// LdifParser parses input lines like an AWK script.
+    /// Currently line wraps are not supported.
     ///
     /// todo line wraps
-    /// todo base64 encoded DNs and values
-    /// todo binary (not valid utf8) values
     /// todo extract into an own crate
     /// todo multiple cases of attribute names
     fn next(&mut self) -> Option<Self::Item> {
@@ -385,6 +386,7 @@ pub fn parse_ldif_as_search_entries(ldif_str: &str) -> Result<Vec<SearchEntry>, 
 pub mod test {
     use super::*;
     use indoc::*;
+    use log::debug;
 
     #[test]
     fn parse_bytes_as_utf8_ok() {
@@ -395,24 +397,26 @@ pub mod test {
 
     #[test]
     fn parse_bytes_as_utf8_err() {
+        let _ = env_logger::try_init();
         //let bytes = vec![0]; // ist ok
         let bytes = vec![126, 190];
         let result = std::str::from_utf8(&bytes);
-        print!("{:?}", result);
+        debug!("{:?}", result);
         assert!(result.is_err());
     }
 
     #[test]
     fn encode_bytes() {
-        use base64::{engine::general_purpose, Engine as _};
+        let _ = env_logger::try_init();
         //let orig = b"data";
         let orig = vec![126, 190]; // not utf8
         let encoded: String = general_purpose::STANDARD.encode(orig);
-        print!("{:?}", encoded);
+        debug!("{:?}", encoded);
     }
 
     #[test]
     fn test_parse_1_ldif_entry() {
+        let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             dn: dc=test
             objectclass: dcObject
@@ -421,7 +425,7 @@ pub mod test {
             dc: test"
         };
         let entries = parse_ldif(ldif_str).unwrap();
-        print!("entries: {:?}", entries);
+        debug!("entries: {:?}", entries);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.dn, "dc=test");
@@ -441,6 +445,7 @@ pub mod test {
 
     #[test]
     fn test_parse_2_ldif_entries() {
+        let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             dn: o=test
             objectclass: organization
@@ -452,7 +457,7 @@ pub mod test {
             "
         };
         let entries = parse_ldif(ldif_str).unwrap();
-        print!("entries: {:?}", entries);
+        debug!("entries: {:?}", entries);
         assert_eq!(entries.len(), 2);
         {
             let entry = &entries[0];
@@ -482,6 +487,7 @@ pub mod test {
 
     #[test]
     fn test_parse_ldif_with_comments() {
+        let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             # This is a comment
             dn: dc=test
@@ -492,7 +498,7 @@ pub mod test {
             dc: test"
         };
         let entries = parse_ldif(ldif_str).unwrap();
-        print!("entries: {:?}", entries);
+        debug!("entries: {:?}", entries);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.dn, "dc=test");
@@ -561,6 +567,7 @@ pub mod test {
 
     #[test]
     fn test_parse_encoded_dn() {
+        let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             # Base64-UTF8-decoded 'o=test'
             dn:: bz10ZXN0
@@ -568,7 +575,7 @@ pub mod test {
             o: test"
         };
         let entries = parse_ldif(ldif_str).unwrap();
-        print!("entries: {:?}", entries);
+        debug!("entries: {:?}", entries);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.dn, "o=test");
@@ -584,6 +591,7 @@ pub mod test {
 
     #[test]
     fn test_parse_encoded_attr_value() {
+        let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             dn: o=test
             objectclass: organization
@@ -591,7 +599,7 @@ pub mod test {
             o:: dGVzdA=="
         };
         let entries = parse_ldif(ldif_str).unwrap();
-        print!("entries: {:?}", entries);
+        debug!("entries: {:?}", entries);
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.dn, "o=test");
@@ -602,6 +610,34 @@ pub mod test {
         assert_eq!(obj_class.len(), 1);
         assert_eq!(o.len(), 1);
         assert!(obj_class.contains(&AttributeValue::Text("organization".to_string())));
-        assert!(o.contains(&&AttributeValue::Text("test".to_string())));
+        assert!(o.contains(&AttributeValue::Text("test".to_string())));
+    }
+
+    #[test]
+    fn test_parse_binary_attr_value() {
+        let _ = env_logger::try_init();
+        let ldif_str = indoc! { "
+            dn: o=test
+            objectClass: organization
+            o: test
+            # vec![126, 190] is not valid UTF-8, means binary
+            jpegPhoto:: fr4="
+        };
+        let entries = parse_ldif(ldif_str).unwrap();
+        debug!("entries: {:?}", entries);
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.dn, "o=test");
+        let attrs = &entry.attrs;
+        assert_eq!(attrs.len(), 3);
+        let obj_class = attrs.get("objectClass").unwrap();
+        let o = attrs.get("o").unwrap();
+        let jpeg_photo = attrs.get("jpegPhoto").unwrap();
+        assert_eq!(obj_class.len(), 1);
+        assert_eq!(o.len(), 1);
+        assert_eq!(jpeg_photo.len(), 1);
+        assert!(obj_class.contains(&AttributeValue::Text("organization".to_string())));
+        assert!(o.contains(&AttributeValue::Text("test".to_string())));
+        assert!(jpeg_photo.contains(&AttributeValue::Binary(vec![126, 190])));
     }
 }
