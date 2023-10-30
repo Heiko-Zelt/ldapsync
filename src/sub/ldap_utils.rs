@@ -656,13 +656,12 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
         let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
-        let mut expected_entries_parser = LdifParser::from_str(indoc!{"
+        let mut expected_search_entries = parse_ldif_as_search_entries(indoc!{"
             dn: cn=new012345,ou=Users,dc=test
             objectclass: inetOrgPerson
             givenname: Amira
             userpassword: welt123!"
-        });
-        let expected_entries = expected_entries_parser.collect_to_vec().unwrap();
+        }).unwrap();
 
         let search_entries = search_modified_entries_attrs_filtered(
             &mut ldap_conn,
@@ -673,7 +672,7 @@ pub mod test {
         .await
         .unwrap();
 
-        assert_vec_search_entries_eq(&search_entries, &expected_entries);
+        assert_vec_search_entries_eq(&search_entries, &expected_search_entries);
 
         assert_eq!(search_entries.len(), 1);
         let attrs = &search_entries[0].attrs;
@@ -776,7 +775,7 @@ pub mod test {
     #[test]
     fn test_diff_attributes() {
         let _ = env_logger::try_init();
-        let mut source_entries = LdifParser::from_str(indoc! {"
+        let mut source_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -785,8 +784,8 @@ pub mod test {
             name: Magic Orchestra
             l: Frankfurt
             stateorprovincename: Hessen"
-        });
-        let mut target_entries = LdifParser::from_str(indoc! {"
+        }).unwrap();
+        let mut target_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -795,9 +794,9 @@ pub mod test {
             name: Old Orchestra
             o: Hessischer Rundfunk
             stateorprovincename: Hessen"
-        });
-        let source_attrs = &source_entries.next().unwrap().unwrap().attrs;
-        let target_attrs = &target_entries.next().unwrap().unwrap().attrs;
+        }).unwrap();
+        let source_attrs = &source_entries[0].attrs;
+        let target_attrs = &target_entries[0].attrs;
 
         let result = diff_attributes(source_attrs, target_attrs);
 

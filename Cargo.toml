@@ -14,11 +14,11 @@ regex = "1.10"
 #cf-env = "0.1" has bug: field "plan" of struct Service is not optional
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+base64 = "0.21"
 
 [dev-dependencies]
 indoc = "2.0"
 rstest = "0.18"
-base64 = "0.21"
 
 # "sudo apt install slapd" because OpenLDAP server is needed
 ldap-test-server = "0.0"
