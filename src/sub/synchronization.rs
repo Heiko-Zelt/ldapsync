@@ -349,7 +349,8 @@ impl<'a> Synchronization<'a> {
 mod test {
     use super::*;
     use crate::sub::ldap_utils::simple_connect;
-    use crate::sub::ldap_utils::test::{start_test_server, search_all, parse_search_entries, assert_vec_search_entries_eq};
+    use crate::sub::ldap_utils::test::{start_test_server, search_all, assert_vec_search_entries_eq};
+    use crate::sub::ldif::parse_ldif_as_search_entries;
     use crate::sub::synchronization_config::SynchronizationConfig;
     use indoc::*;
   
@@ -602,97 +603,58 @@ mod test {
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
 
-        let expected_source_entries_json = indoc!{ r#"
-            [
-                {
-                    "dn": "dc=source",
-                    "attrs": {
-                        "objectClass": ["dcObject", "organization"],
-                        "dc": ["source"],
-                        "o": ["Source Org"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "cn=admin,dc=source",
-                    "attrs": {
-                        "userPassword": ["secret"],
-                        "sn": ["Admin"],
-                        "objectClass": ["inetOrgPerson"],
-                        "cn": ["admin"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "ou=Users,dc=source",
-                    "attrs": {
-                        "ou": ["Users"],
-                        "objectClass": ["top", "organizationalUnit"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "o=de,ou=Users,dc=source",
-                    "attrs": {
-                        "objectClass": ["top", "organization"],
-                        "o": ["de"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "o=ABC,o=de,ou=Users,dc=source",
-                    "attrs": {
-                        "objectClass": ["top", "organization"],
-                        "o": ["ABC"]
-                    },
-                    "bin_attrs": {}
-                }
-            ]"#
-        };
+        let expected_source_entries = parse_ldif_as_search_entries( indoc!{ "
+            dn: dc=source
+            objectClass: dcObject
+            objectClass: organization
+            dc: source
+            o: Source Org
 
-        let expected_target_entries_json = indoc!{ r#"
-            [
-                {
-                    "dn": "dc=target",
-                    "attrs": {
-                        "o": ["Target Org"],
-                        "dc": ["target"],
-                        "objectClass": ["dcObject", "organization"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "cn=admin,dc=target",
-                    "attrs": {
-                        "sn": ["Admin"],
-                        "objectClass": ["inetOrgPerson"],
-                        "userPassword": ["secret"],
-                        "cn": ["admin"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "ou=Users,dc=target",
-                    "attrs": {
-                        "objectClass": ["top", "organizationalUnit"],
-                        "ou": ["Users"]
-                    },
-                    "bin_attrs": {}
-                },
-                {
-                    "dn": "o=de,ou=Users,dc=target",
-                    "attrs": {
-                        "objectClass": ["top", "organization"],
-                        "o": ["de"]
-                    },
-                    "bin_attrs": {}
-                }
-            ]"#
-        };
+            dn: cn=admin,dc=source
+            userPassword: secret
+            sn: Admin
+            objectClass: inetOrgPerson
+            cn: admin
 
-        let expected_source_entries = parse_search_entries(expected_source_entries_json);
-        let expected_target_entries = parse_search_entries(expected_target_entries_json);
+            dn: ou=Users,dc=source
+            ou: Users
+            objectClass: top
+            objectClass: organizationalUnit
 
+            dn: o=de,ou=Users,dc=source
+            objectClass: top
+            objectClass: organization
+            o: de
+
+            dn: o=ABC,o=de,ou=Users,dc=source
+            objectClass: top
+            objectClass: organization
+            o: ABC"
+        }).unwrap();
+
+        let expected_target_entries = parse_ldif_as_search_entries( indoc!{ "
+            dn: dc=target
+            o: Target Org
+            dc: target
+            objectClass: dcObject
+            objectClass: organization
+
+            dn: cn=admin,dc=target
+            sn: Admin
+            objectClass: inetOrgPerson
+            userPassword: secret
+            cn: admin
+
+            dn: ou=Users,dc=target
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+
+            dn: o=de,ou=Users,dc=target
+            objectClass: top
+            objectClass: organization
+            o: de"
+        }).unwrap();
 
         let result = Synchronization::sync_delete(
             &mut source_ldap,
@@ -908,6 +870,7 @@ mod test {
 
             dn: cn=admin,dc=test
             objectClass: inetOrgPerson
+            cn: admin
             sn: Admin
             userPassword: secret
             modifyTimestamp: 20231019182735Z
@@ -924,12 +887,14 @@ mod test {
             o: de
             modifyTimestamp: 20231019182737Z
 
+            # to be added
             dn: o=AB,o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
             o: AB
             modifyTimestamp: 20231019182738Z
 
+            # to be added
             dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
             objectClass: inetOrgPerson
             sn: Müller
@@ -952,6 +917,7 @@ mod test {
 
             dn: cn=admin,dc=test
             objectClass: inetOrgPerson
+            cn: admin
             sn: Admin
             userPassword: secret
 
@@ -961,11 +927,13 @@ mod test {
             o: sync_timestamps
             name: 19751129000000Z
     
+            # to be modified
             dn: ou=Users,dc=test
             objectClass: top
             objectClass: organizationalUnit
             ou: Users
         
+            # to be modified
             dn: o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
@@ -984,6 +952,56 @@ mod test {
             givenName: André
             userPassword: hallowelt123!"
         };
+
+        let mut expected = parse_ldif_as_search_entries(indoc! { "
+            # not synchronized
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            # not synchronized
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            cn: admin
+            sn: Admin
+            userPassword: secret
+
+            # not synchronized
+            dn: o=sync_timestamps,dc=test
+            objectClass: organization
+            objectClass: extensibleObject
+            o: sync_timestamps
+            # attribute updated
+            name: 19751129000000Z
+
+            # modified
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+    
+            # modified
+            dn: o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: de
+
+            # added
+            dn: o=AB,o=de,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: AB
+
+            # added
+            dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            # no givenName
+            userPassword: hallowelt123!"
+        }).unwrap();
 
         let _source_server = start_test_server(
             source_plain_port,
@@ -1014,7 +1032,7 @@ mod test {
             base_dn: target_base_dn.clone(),
         };
 
-        let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service)]);
+        let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service.clone())]);
         let sync_config = SynchronizationConfig {
             source: "ldap1".to_string(),
             target: "ldap2".to_string(),
@@ -1036,6 +1054,20 @@ mod test {
         assert_eq!(result.added, 2);
         assert_eq!(result.modified, 2);
         assert_eq!(result.deleted, 2);
+
+        let mut target_ldap = simple_connect(&target_service).await.unwrap();
+        let mut after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
+
+        let expected_timestamp_pos = expected.iter().position(|entry| entry.dn == "o=sync_timestamps,dc=test").unwrap();
+        let after_timestamp_pos = after.iter().position(|entry| entry.dn == "o=sync_timestamps,dc=test").unwrap();
+        // timestamp geändert?
+        assert!(after[after_timestamp_pos].attrs.get("name").unwrap()[0] > expected[expected_timestamp_pos].attrs.get("name").unwrap()[0]);
+        // nicht vergleichen. gleichsetzen
+        after[after_timestamp_pos].attrs.remove("name");
+        expected[expected_timestamp_pos].attrs.remove("name");
+
+        assert_vec_search_entries_eq(&after, &expected);
+
     }
 
 }

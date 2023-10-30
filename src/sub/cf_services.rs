@@ -87,7 +87,6 @@ pub fn map_ldap_services(services_vec: &Vec<Service>) -> Result<HashMap<String, 
 mod test {
     use super::*;
     use indoc::*;
-    use rstest::*;
 
     #[test]
     fn test_parse_service_types_full() {

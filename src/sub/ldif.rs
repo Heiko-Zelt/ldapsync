@@ -1,6 +1,8 @@
 use base64::{engine::general_purpose, DecodeError, Engine as _};
 use ldap3::SearchEntry;
 use regex::Regex;
+use core::convert::AsRef;
+use std::ops::Deref;
 use std::collections::HashMap;
 use std::iter::Enumerate;
 use std::str;
@@ -10,7 +12,7 @@ use std::str::Utf8Error;
 /// If an attribute value is provided in clear text, it's definitely text.
 /// If it is provided base64-encoded and it can be parsed as UTF8, its probably text, otherwise binary.
 /// If you know the specific attribute definitions in the LDAP schema, you know for sure.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum AttributeValue {
     Text(String),
     Binary(Vec<u8>),
@@ -28,6 +30,19 @@ impl AttributeValue {
         match self {
             Self::Binary(b) => b.clone(),
             Self::Text(t) => t.as_bytes().to_vec(),
+        }
+    }
+}
+
+impl AsRef<[u8]> for AttributeValue {
+    fn as_ref(&self) -> &[u8]{
+        match self {
+            AttributeValue::Binary ( b ) => {
+                 b.deref().as_ref()
+            },
+            AttributeValue::Text ( t ) => {
+                 t.deref().as_ref()
+            }
         }
     }
 }
@@ -231,7 +246,7 @@ impl Iterator for LdifParser<'_> {
                                         AttributeValue::Binary(_) => {
                                             return Some(Err(ParseLdifError {
                                                 line_num: line_num,
-                                                quote: line.to_string(),
+                                                quote: encoded_dn,
                                                 error_type: ParseLdifErrorType::BinaryDnNotAllowed,
                                             }));
                                         }
@@ -254,11 +269,11 @@ impl Iterator for LdifParser<'_> {
                     match attr_line_captures {
                         Some(caps) => {
                             if inside_entry {
-                                let attr_name = caps.get(1).unwrap().as_str();
+                                let attr_name = caps.get(1).unwrap().as_str().to_lowercase();
                                 let attr_value = caps.get(2).unwrap().as_str().to_string();
                                 LdifParser::add_attr_value(
                                     &mut entry.attrs,
-                                    attr_name,
+                                    &attr_name,
                                     AttributeValue::Text(attr_value),
                                 );
                                 continue;
@@ -277,7 +292,7 @@ impl Iterator for LdifParser<'_> {
                     match encoded_attr_line_captures {
                         Some(caps) => {
                             if inside_entry {
-                                let attr_name = caps.get(1).unwrap().as_str();
+                                let attr_name = caps.get(1).unwrap().as_str().to_lowercase();
                                 let encoded_attr_value = caps.get(2).unwrap().as_str().to_string();
                                 let decode_result =
                                     LdifParser::decode_value(&encoded_attr_value, line_num);
@@ -285,7 +300,7 @@ impl Iterator for LdifParser<'_> {
                                     Ok(attr_value) => {
                                         LdifParser::add_attr_value(
                                             &mut entry.attrs,
-                                            attr_name,
+                                            &attr_name,
                                             attr_value,
                                         );
                                         continue;
@@ -549,6 +564,22 @@ pub mod test {
     }
 
     #[test]
+    fn test_parse_ldif_binary_dn() {
+        let ldif_str = indoc! { "
+            # The DN can't be parsed as valid UTF8
+            dn:: fr4=
+            objectclass: organization"
+        };
+        let expected_err = ParseLdifError {
+            line_num: 1,
+            quote: "fr4=".to_string(),
+            error_type: ParseLdifErrorType::BinaryDnNotAllowed,
+        };
+        let err_result = parse_ldif(ldif_str).err().unwrap();
+        assert_eq!(err_result, expected_err);
+    }
+
+    #[test]
     fn test_parse_ldif_line_not_matched() {
         let ldif_str = indoc! { "
             dn: o=Test Org
@@ -566,7 +597,7 @@ pub mod test {
     }
 
     #[test]
-    fn test_parse_encoded_dn() {
+    fn test_parse_ldif_encoded_dn() {
         let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             # Base64-UTF8-decoded 'o=test'
@@ -590,7 +621,7 @@ pub mod test {
     }
 
     #[test]
-    fn test_parse_encoded_attr_value() {
+    fn test_parse_ldif_encoded_attr_value() {
         let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             dn: o=test
@@ -614,7 +645,7 @@ pub mod test {
     }
 
     #[test]
-    fn test_parse_binary_attr_value() {
+    fn test_parse_ldif_binary_attr_value() {
         let _ = env_logger::try_init();
         let ldif_str = indoc! { "
             dn: o=test
@@ -630,9 +661,9 @@ pub mod test {
         assert_eq!(entry.dn, "o=test");
         let attrs = &entry.attrs;
         assert_eq!(attrs.len(), 3);
-        let obj_class = attrs.get("objectClass").unwrap();
+        let obj_class = attrs.get("objectclass").unwrap();
         let o = attrs.get("o").unwrap();
-        let jpeg_photo = attrs.get("jpegPhoto").unwrap();
+        let jpeg_photo = attrs.get("jpegphoto").unwrap();
         assert_eq!(obj_class.len(), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(jpeg_photo.len(), 1);

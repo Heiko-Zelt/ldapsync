@@ -2,7 +2,6 @@ use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry
 use log::{debug, info};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-
 use crate::sub::cf_services::LdapService;
 
 /// Joins 2 distinguished names.
@@ -221,6 +220,7 @@ pub fn diff_attributes(
         let delete = Mod::Delete(attr_name.clone(), HashSet::new());
         mods.push(delete);
     }
+
     for attr_name in missing {
         let source_values_vec = source_attrs.get(attr_name).unwrap();
         let source_values_set: HashSet<String> =
@@ -250,7 +250,6 @@ pub mod test {
     use indoc::*;
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
     use rstest::rstest;
-    use serde::Deserialize;
 
     //use futures::executor::block_on;
     //use tokio::runtime;
@@ -258,35 +257,13 @@ pub mod test {
     //use std::time::Duration;
     use log::debug;
 
-    /// ldap3::SearchEntry does not implement the Deserialize trait.
-    /// So I define my own struct, which can easily be mapped to SearchEntry.
-    #[derive(Deserialize)]
-    struct SerdeSearchEntry {
-        pub dn: String,
-        pub attrs: HashMap<String, Vec<String>>,
-        pub bin_attrs: HashMap<String, Vec<Vec<u8>>>,
-    }
-
-    pub fn parse_search_entries(json_str: &str) -> Vec<SearchEntry> {
-        let serde_search_entries = serde_json::from_str::<Vec<SerdeSearchEntry>>(json_str).unwrap();
-        let search_entries = serde_search_entries
-            .into_iter()
-            .map(|serde_entry| SearchEntry {
-                dn: serde_entry.dn,
-                attrs: serde_entry.attrs,
-                bin_attrs: serde_entry.bin_attrs,
-            })
-            .collect();
-        search_entries
-    }
-
     pub fn assert_attrs_eq(
         attrs1: &HashMap<String, Vec<String>>,
         attrs2: &HashMap<String, Vec<String>>,
     ) {
         let result = diff_attributes(&attrs1, &attrs2);
         if result.len() != 0 {
-            panic!("attr1: {:?}, attrs2: {:?}, diff: {:?}", attrs1, attrs2, result);
+            panic!("attributes differ:\nattrs1: {:?},\nattrs2: {:?},\ndiff: {:?}", attrs1, attrs2, result);
         }
     }
 
@@ -300,10 +277,14 @@ pub mod test {
 
     pub fn assert_vec_search_entries_eq(entries1: &Vec<SearchEntry>, entries2: &Vec<SearchEntry>) {
         if entries1.len() != entries2.len() {
+            let dns1: Vec<_> = entries1.iter().map(|entry| entry.dn.to_string() ).collect();
+            let dns2: Vec<_> = entries2.iter().map(|entry| entry.dn.to_string() ).collect();
             panic!(
-                "different number of entries. {} != {}",
+                "different number of entries {} != {}, DNs1: {:?}, DNs2: {:?}",
                 entries1.len(),
-                entries2.len()
+                entries2.len(),
+                dns1,
+                dns2
             );
         }
         // map dn to entries
@@ -383,6 +364,16 @@ pub mod test {
         server
     }
 
+    pub fn attr_names_to_lowercase(old_attrs: HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
+        let new_attrs = old_attrs
+            .iter()
+            .map(|(name, values)| {
+                (name.to_lowercase(), values.clone())
+            })
+            .collect();
+        new_attrs
+    }
+
     pub async fn search_all(ldap: &mut Ldap, base_dn: &str) -> Result<Vec<SearchEntry>, LdapError> {
         debug!("search all");
         let search_result = ldap
@@ -392,7 +383,11 @@ pub mod test {
         debug!("found {} entries", result_entries.len());
         let search_entries = result_entries
             .into_iter()
-            .map(|result_entry| SearchEntry::construct(result_entry.clone()))
+            .map(|result_entry| {
+                let mut search_entry = SearchEntry::construct(result_entry.clone());
+                search_entry.attrs = attr_names_to_lowercase(search_entry.attrs);
+                search_entry
+             })
             .collect();
         Ok(search_entries)
     }
@@ -408,21 +403,21 @@ pub mod test {
         let password = "secret".to_string();
         let base_dn = "dc=test".to_string();
         let content = indoc! { "
-        dn: dc=test
-        objectclass: dcObject
-        objectclass: organization
-        o: Test Org
-        dc: test
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
 
-        dn: cn=admin,dc=test
-        objectClass: inetOrgPerson
-        sn: Admin
-        userPassword: secret
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
 
-        dn: ou=Users,dc=test
-        objectClass: top
-        objectClass: organizationalUnit
-        ou: Users"
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users"
         };
 
         let service = LdapService {
@@ -656,7 +651,7 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
         let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
-        let mut expected_search_entries = parse_ldif_as_search_entries(indoc!{"
+        let expected_search_entries = parse_ldif_as_search_entries(indoc!{"
             dn: cn=new012345,ou=Users,dc=test
             objectclass: inetOrgPerson
             givenname: Amira
@@ -775,7 +770,7 @@ pub mod test {
     #[test]
     fn test_diff_attributes() {
         let _ = env_logger::try_init();
-        let mut source_entries = parse_ldif_as_search_entries(indoc! {"
+        let source_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin
@@ -785,7 +780,7 @@ pub mod test {
             l: Frankfurt
             stateorprovincename: Hessen"
         }).unwrap();
-        let mut target_entries = parse_ldif_as_search_entries(indoc! {"
+        let target_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
             instruments: violin

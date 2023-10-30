@@ -1,8 +1,7 @@
 pub mod sub;
 
-use log::{debug, info, error};
+use log::{info, error};
 use tokio::time::sleep;
-
 use crate::sub::app_config::AppConfig;
 use crate::sub::synchronization::Synchronization;
 
