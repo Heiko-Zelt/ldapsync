@@ -307,12 +307,36 @@ pub mod test {
     use ldap3::{LdapError, LdapResult};
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
     use rstest::rstest;
+    use std::sync::Mutex;
+
+    // singleton pattern
+    static PORT_SEQUENCE: Mutex<u16> = Mutex::new(1389);
+
+    /// Tests may run in parallel and start a test LDAP server each.
+    /// So they need different TCP ports.
+    /// This function returns the next TCP port,
+    /// incrmeneting by 2, so we get 2 ports one for plain LDAP and one for TLS.
+    pub fn next_port() -> u16 {
+         let mut port_guard = PORT_SEQUENCE.lock().unwrap();
+         let result = *port_guard;
+         *port_guard += 2; 
+         result
+    }
 
     //use futures::executor::block_on;
     //use tokio::runtime;
     //use std::thread::sleep;
     //use std::time::Duration;
     use log::debug;
+
+    /*
+    #[test]
+    pub fn test_mutex() {
+        println!("port: {}", next_port());
+        println!("port: {}", next_port());
+        println!("port: {}", next_port());
+    }
+    */
 
     pub fn assert_attrs_eq(
         attrs1: &HashMap<String, Vec<String>>,
@@ -458,7 +482,7 @@ pub mod test {
         let _ = env_logger::try_init();
 
         // todo write a function/sequence which returns an unused port/port within a range
-        let plain_port = 24389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -499,7 +523,7 @@ pub mod test {
     #[tokio::test]
     async fn test_simple_connect_failed() {
         let _ = env_logger::try_init();
-        let plain_port = 10389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let wrong_password = "secret2".to_string();
@@ -547,7 +571,7 @@ pub mod test {
     async fn test_search_one_entry_by_dn() {
         let _ = env_logger::try_init();
 
-        let plain_port = 17389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -606,7 +630,7 @@ pub mod test {
     async fn test_search_one_entry_by_dn_not_found() {
         let _ = env_logger::try_init();
 
-        let plain_port = 17389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -654,7 +678,7 @@ pub mod test {
     async fn test_search_one_entry_by_dn_with_binary_value() {
         let _ = env_logger::try_init();
 
-        let plain_port = 23389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -695,7 +719,7 @@ pub mod test {
     async fn test_search_one_entry_by_dn_attrs_filtered() {
         let _ = env_logger::try_init();
 
-        let plain_port = 18389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -759,7 +783,7 @@ pub mod test {
     #[tokio::test]
     async fn test_search_modified_entries_attrs_filtered_success() {
         let _ = env_logger::try_init();
-        let plain_port = 21389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -837,7 +861,7 @@ pub mod test {
     #[tokio::test]
     async fn test_search_modified_entries_attrs_filtered_fail() {
         let _ = env_logger::try_init();
-        let plain_port = 28389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -888,7 +912,7 @@ pub mod test {
     #[tokio::test]
     async fn test_search_norm_dns_successful() {
         let _ = env_logger::try_init();
-        let plain_port = 27389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -940,7 +964,7 @@ pub mod test {
     #[tokio::test]
     async fn test_search_norm_dns_base_dn_not_found() {
         let _ = env_logger::try_init();
-        let plain_port = 29389;
+        let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -986,7 +1010,7 @@ pub mod test {
         //env_logger::init();
         let _ = env_logger::try_init();
 
-        let source_plain_port = 11389;
+        let source_plain_port = next_port();
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=test".to_string();
         let source_password = "secret".to_string();
@@ -1014,7 +1038,7 @@ pub mod test {
             o: de"
         };
 
-        let target_plain_port = 12389;
+        let target_plain_port = next_port();
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=test".to_string();
         let target_password = "secret".to_string();

@@ -371,7 +371,7 @@ impl<'a> Synchronization<'a> {
 mod test {
     use super::*;
     use crate::sub::ldap_utils::simple_connect;
-    use crate::sub::ldap_utils::test::{start_test_server, search_all, assert_vec_search_entries_eq};
+    use crate::sub::ldap_utils::test::{start_test_server, search_all, assert_vec_search_entries_eq, next_port};
     use crate::sub::ldif::parse_ldif_as_search_entries;
     use crate::sub::synchronization_config::SynchronizationConfig;
     use indoc::*;
@@ -381,7 +381,7 @@ mod test {
     async fn test_sync_modified() {
         let _ = env_logger::try_init();
 
-        let source_plain_port = 13389;
+        let source_plain_port = next_port();
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=test".to_string();
         let source_password = "secret".to_string();
@@ -426,7 +426,7 @@ mod test {
             modifyTimestamp: 20231019182739Z"
         };
 
-        let target_plain_port = 24389;
+        let target_plain_port = next_port();
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=test".to_string();
         let target_password = "secret".to_string();
@@ -522,7 +522,7 @@ mod test {
         //env_logger::init();
         let _ = env_logger::try_init();
 
-        let source_plain_port = 15389;
+        let source_plain_port = next_port();
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=source".to_string();
         let source_password = "secret".to_string();
@@ -556,7 +556,7 @@ mod test {
             modifyTimestamp: 20231019182738Z"
         };
 
-        let target_plain_port = 16389;
+        let target_plain_port = next_port();
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=target".to_string();
         let target_password = "secret".to_string();
@@ -709,7 +709,7 @@ mod test {
         //env_logger::init();
         let _ = env_logger::try_init();
 
-        let source_plain_port = 25389;
+        let source_plain_port = next_port();
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=source".to_string();
         let source_password = "secret".to_string();
@@ -732,7 +732,7 @@ mod test {
             ou: Users"
         };
 
-        let target_plain_port = 26389;
+        let target_plain_port = next_port();
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=target".to_string();
         let target_password = "secret".to_string();
@@ -810,7 +810,7 @@ mod test {
         let _ = env_logger::try_init();
 
         let ts_store_name = "ldap1".to_string();
-        let ts_store_plain_port = 20389;
+        let ts_store_plain_port = next_port();
         let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
         let ts_store_bind_dn = "cn=admin,dc=test".to_string();
         let ts_store_password = "secret".to_string();
@@ -897,7 +897,7 @@ mod test {
 
         let sync_timestamp = "20231025235959Z";
         let ts_store_name = "ldap1".to_string();
-        let ts_store_plain_port = 19389;
+        let ts_store_plain_port = next_port();
         let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
         let ts_store_bind_dn = "cn=admin,dc=test".to_string();
         let ts_store_password = "secret".to_string();
@@ -980,7 +980,7 @@ mod test {
     async fn test_synchronisation() {
         let _ = env_logger::try_init();
 
-        let source_plain_port = 22389;
+        let source_plain_port = next_port();
         let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
         let source_bind_dn = "cn=admin,dc=test".to_string();
         let source_password = "secret".to_string();
@@ -1036,7 +1036,7 @@ mod test {
             modifyTimestamp: 20231019182739Z"
         };
 
-        let target_plain_port = 14389;
+        let target_plain_port = next_port();
         let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
         let target_bind_dn = "cn=admin,dc=test".to_string();
         let target_password = "secret".to_string();
