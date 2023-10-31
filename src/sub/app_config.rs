@@ -271,7 +271,7 @@ mod test {
         debug!("app_config: {:?}", app_config);
         assert!(app_config.is_err());
         let err = app_config.expect_err("AppConfigError was expected as result");
-        print!("{:?}", err);
+        debug!("{:?}", err);
         match err {
             AppConfigError::EnvVarParseJsonError {
                 env_var_name: name,
@@ -298,7 +298,7 @@ mod test {
         debug!("app_config: {:?}", app_config);
         assert!(app_config.is_err());
         let err = app_config.expect_err("AppConfigError was expected as result");
-        print!("{:?}", err);
+        debug!("{:?}", err);
         match err {
             AppConfigError::EnvVarParseJsonError {
                 env_var_name: name,

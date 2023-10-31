@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::sub::cf_services::LdapService;
 use crate::sub::ldap_utils::*;
+use crate::sub::ldap_result_codes::*;
 use crate::sub::synchronization_config::SynchronizationConfig;
 
 /// The object class "extensibleObject" is defined in OpenLdap core schema.
@@ -70,7 +71,7 @@ impl<'a> Synchronization<'a> {
         let mut target_ldap = simple_connect(target_service).await?;
         let mut ts_store_ldap = simple_connect(ts_store_service).await?;
 
-        let old_sync_timestamp = self.load_sync_timestamp(&mut ts_store_ldap).await.unwrap();
+        let old_sync_timestamp = self.load_sync_timestamp(&mut ts_store_ldap).await?;
 
         let now = Utc::now();
         let new_sync_timestamp = format!(
@@ -110,8 +111,7 @@ impl<'a> Synchronization<'a> {
 
         if (sync_statistics.added != 0 || sync_statistics.modified != 0) && !self.dry_run {
             self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
-                .await
-                .unwrap();
+                .await?;
         }
         Ok(sync_statistics)
     }
@@ -153,7 +153,7 @@ impl<'a> Synchronization<'a> {
                 &format!("(objectClass={})", SYNC_TIMESTAMP_OBJ_CLASS),
                 vec![SYNC_TIMESTAMP_ATTR_NAME],
             )
-            .await?;
+            .await?.success()?;
         let ldap_result = search_result.1;
         debug!("load_sync_timestamp: LDAP result code: {}", ldap_result.rc);
         if ldap_result.rc != 0 {
@@ -170,7 +170,7 @@ impl<'a> Synchronization<'a> {
         let search_entry = SearchEntry::construct(result_entry);
         debug!("load_sync_timestamp: entry: {:?}", search_entry);
         // todo check if there is exact one value
-        let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap();
+        let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap(); // todo: panic oder Fehler zurückgeben?
         let sync_timestamp_value = sync_timestamp_attr[0].clone();
         Ok(sync_timestamp_value)
     }
@@ -193,7 +193,7 @@ impl<'a> Synchronization<'a> {
         sync_dn: &str,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
-        info!(r#"sync_delete: source_base_dn: "{:?}", target_base_dn: "{:?}", sync_dn: "{:?}")"#, source_base_dn, target_base_dn, sync_dn);
+        info!(r#"sync_delete: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}")"#, source_base_dn, target_base_dn, sync_dn);
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
         let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn).await?;
@@ -321,10 +321,10 @@ impl<'a> Synchronization<'a> {
         let mut trunc_dn = source_search_entry.dn.clone();
         truncate_dn(&mut trunc_dn, source_base_dn_len);
         let target_dn = join_2_dns(&trunc_dn, target_base_dn);
-        let target_search_entry =
-            search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await?;
-        match &target_search_entry {
-            Some(entry) => {
+        let target_search_result =
+            search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await;
+        match target_search_result {
+            Ok(entry) => {
                 // todo dont log userPassword!
                 debug!(r#"sync_modify_one_entry: target entry exists: {:?})"#, &entry);
                 if entry.bin_attrs.len() != 0 {
@@ -339,7 +339,12 @@ impl<'a> Synchronization<'a> {
                 }
                 Ok(true)
             }
-            None => {
+            Err(LdapError::LdapResult { // no problem => add entry
+                result: LdapResult {
+                    rc: RC_NO_SUCH_OBJECT!(),
+                    ..
+                }
+            }) => {
                 debug!(r#"sync_modify_one_entry: target entry did not exist"#);
                 // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
                 let target_attrs = source_search_entry
@@ -357,6 +362,7 @@ impl<'a> Synchronization<'a> {
                 }
                 Ok(false)
             }
+            Err(err) => return Err(err)
         }
     }
 }
@@ -512,7 +518,7 @@ mod test {
 
 
     #[tokio::test]
-    async fn test_sync_delete() {
+    async fn test_sync_delete_successful() {
         //env_logger::init();
         let _ = env_logger::try_init();
 
@@ -696,6 +702,108 @@ mod test {
         debug!("target entries {:?}", target_search_entries);
         assert_vec_search_entries_eq(&target_search_entries, &expected_target_entries);
     }
+
+
+    #[tokio::test]
+    async fn test_sync_delete_base_dn_not_found_in_source() {
+        //env_logger::init();
+        let _ = env_logger::try_init();
+
+        let source_plain_port = 25389;
+        let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
+        let source_bind_dn = "cn=admin,dc=source".to_string();
+        let source_password = "secret".to_string();
+        let source_base_dn = "dc=source".to_string();
+        let source_content = indoc! { "
+            dn: dc=source
+            objectclass: dcObject
+            objectclass: organization
+            o: Source Org
+            dc: source
+
+            dn: cn=admin,dc=source
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=source
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users"
+        };
+
+        let target_plain_port = 26389;
+        let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
+        let target_bind_dn = "cn=admin,dc=target".to_string();
+        let target_password = "secret".to_string();
+        let target_base_dn = "dc=target".to_string();
+        let target_content = indoc! { "
+            dn: dc=target
+            objectclass: dcObject
+            objectclass: organization
+            o: Target Org
+            dc: target
+
+            dn: cn=admin,dc=target
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+    
+            dn: ou=Users,dc=target
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+        
+            dn: o=de,ou=Users,dc=target
+            objectClass: top
+            objectClass: organization
+            o: de"
+        };
+
+        let _source_server = start_test_server(
+            source_plain_port,
+            &source_base_dn,
+            source_content,
+        )
+        .await;
+        let _target_server = start_test_server(
+            target_plain_port,
+            &target_base_dn,
+            target_content,
+        )
+        .await;
+
+        let source_service = LdapService {
+            url: source_url,
+            bind_dn: source_bind_dn,
+            password: source_password,
+            base_dn: source_base_dn.clone(),
+        };
+
+        let target_service = LdapService {
+            url: target_url,
+            bind_dn: target_bind_dn,
+            password: target_password,
+            base_dn: target_base_dn.clone(),
+        };
+
+        let mut source_ldap = simple_connect(&source_service).await.unwrap();
+        let mut target_ldap = simple_connect(&target_service).await.unwrap();
+
+        let result = Synchronization::sync_delete(
+            &mut source_ldap,
+            &mut target_ldap,
+            &source_base_dn,
+            &target_base_dn,
+            "o=de,ou=Users",
+            false,
+        )
+        .await;
+ 
+        debug!("result: {:?}", result);
+        assert!(matches!(&result, Err(LdapError::LdapResult{result: LdapResult { rc: 32, .. }})));
+
+    }    
 
     #[tokio::test]
     async fn test_load_sync_timestamp() {

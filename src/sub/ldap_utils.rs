@@ -1,8 +1,8 @@
+use crate::sub::cf_services::LdapService;
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use crate::sub::cf_services::LdapService;
 
 /// Joins 2 distinguished names.
 /// Both parts may be empty strings.
@@ -53,8 +53,10 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<(LdapConnAsync, Ldap), LdapError>
 
     ldap3::drive!(conn);
-    let ldap_result = ldap.simple_bind(&service.bind_dn, &service.password)
-        .await?;
+    let _ldap_result = ldap
+        .simple_bind(&service.bind_dn, &service.password)
+        .await?
+        .success()?;
     // returns: ldap3::result::Result<LdapResult>
     // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<LdapResult, LdapError>
     // Enum ldap3::result::LdapError
@@ -62,11 +64,16 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
 
     // LdapResult {result: LdapResult } is a variant of LdapError
 
+    /*
+    does the same as .success()?
     if ldap_result.rc != 0 {
         Err(LdapError::LdapResult { result: ldap_result })
     } else {
         Ok(ldap)
     }
+    */
+
+    Ok(ldap)
 }
 
 /// Converts the result entries of a ldap search into a set of DNs.
@@ -93,39 +100,54 @@ pub fn result_entries_to_norm_dns(
 }
 
 /// todo Error, wenn base_dn gar nicht existiert
-pub async fn search_norm_dns(
-    ldap_conn: &mut Ldap,
-    base_dn: &str,
-) -> Result<HashSet<String>, LdapError> {
-    debug!(r#"search_norm_dns: search for DNs from base: "{}""#, base_dn);
-    let search_result = ldap_conn
+pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<String>, LdapError> {
+    debug!(
+        r#"search_norm_dns: search for DNs from base: "{}""#,
+        base_dn
+    );
+    let search_result = ldap
         .search(base_dn, Scope::Subtree, "(objectClass=*)", vec!["dn"])
-        .await?;
+        .await?
+        .success()?;
+
+    //SearchResult tuple fields:
+    //  0: Vec<ResultEntry>
+    //  1: LdapResult
 
     /*
     let ldap_result = search_result.1;
     if ldap_result.rc != 0 { // Is result code ok?
-        return LdapError::LdapResult(ldap_result)
+        return Err(LdapError::LdapResult{ result: ldap_result })
     }
     */
 
     let result_entries = search_result.0;
-    info!("search_norm_dns: found number of entries: {}", result_entries.len());
+    info!(
+        "search_norm_dns: found number of entries: {}",
+        result_entries.len()
+    );
     let norm_dns = result_entries_to_norm_dns(&result_entries, base_dn);
     Ok(norm_dns)
 }
 
-/// returns exactly one entry if found or None if not not found
+/// returns exactly one entry if found or an LdapError
+/// Err(LdapResult { result: LdapResult { rc: 32, matched: "ou=Users,dc=test", text: "", refs: [], ctrls: [] } })
 pub async fn search_one_entry_by_dn(
     ldap_conn: &mut Ldap,
     dn: &str,
-) -> Result<Option<SearchEntry>, LdapError> {
+) -> Result<SearchEntry, LdapError> {
     debug!(r#"search_one_entry_by_dn: "{}""#, dn);
     let search_result = ldap_conn
         .search(dn, Scope::Base, "(objectClass=*)", vec!["*"])
-        .await?;
+        .await?
+        .success()?;
     let result_entries = search_result.0;
-    debug!("search_one_entry_by_dn: found number of entries: {}", result_entries.len()); // should be 0 or 1
+    debug!(
+        "search_one_entry_by_dn: found number of entries: {}",
+        result_entries.len()
+    ); // should be 0 or 1
+
+    /*
     match result_entries.len() {
         0 => Ok(None),
         1 => {
@@ -136,6 +158,14 @@ pub async fn search_one_entry_by_dn(
             panic!("search_one_entry_by_dn: Found more than 1 entry.")
         }
     }
+    */
+
+    if result_entries.len() > 1 {
+        panic!("search_one_entry_by_dn: Found more than 1 entry.")
+    }
+
+    let search_entry = SearchEntry::construct(result_entries[0].clone());
+    Ok(search_entry)
 }
 
 /// converts all attribute names to lower case
@@ -170,22 +200,25 @@ pub fn filter_attrs_inplace() {
 
 /// The attributes list could be very long.
 /// So it's more convinient to search for all non-operative attributes '*' and remove unwanted attributes.
-/// Additionally attribute names are converted to lower case,
-/// because Oracle Interne Directory returns attribute namen in lower case
+/// Additionally attribute names are normalized to lower case,
+/// because Oracle Interne Directory returns attribute names in lower case
 /// and OpenLdap may return attributes in camel case.
 pub async fn search_one_entry_by_dn_attrs_filtered(
     ldap_conn: &mut Ldap,
     dn: &str,
     exclude_attrs: &Regex,
-) -> Result<Option<SearchEntry>, LdapError> {
-    let search_entry = search_one_entry_by_dn(ldap_conn, dn).await?;
-    match search_entry {
-        Some(mut entry) => {
+) -> Result<SearchEntry, LdapError> {
+    let result = search_one_entry_by_dn(ldap_conn, dn).await;
+    match result {
+        Ok(mut entry) => {
             entry.attrs = filter_attrs(&entry.attrs, exclude_attrs);
-            debug!("search_one_entry_by_dn_attrs_filtered: filtered attrs: {:?}", entry.attrs);
-            Ok(Some(entry))
+            debug!(
+                "search_one_entry_by_dn_attrs_filtered: filtered attrs: {:?}",
+                entry.attrs
+            );
+            Ok(entry)
         }
-        None => Ok(None),
+        Err(err) => Err(err),
     }
 }
 
@@ -200,13 +233,17 @@ pub async fn search_modified_entries_attrs_filtered(
     exclude_attrs: &Regex,
 ) -> Result<Vec<SearchEntry>, LdapError> {
     let filter = format!("(modifyTimestamp>={})", old_modify_timestamp);
-    debug!(r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}""#, base_dn, filter);
-    let mut search_result_stream = ldap
+    debug!(
+        r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}""#,
+        base_dn, filter
+    );
+    let mut search_stream = ldap
         .streaming_search(&base_dn, Scope::Subtree, &filter, vec!["*"])
         .await?;
     let mut search_entries: Vec<SearchEntry> = Vec::new();
     loop {
-        let result_entry = search_result_stream.next().await?;
+        let result_entry = search_stream.next().await?;
+        // next() returns ldap3::result::Result<Option<ResultEntry>> = Result<Option<ResultEntry>, LdapError>;
         match result_entry {
             Some(entry) => {
                 let mut search_entry = SearchEntry::construct(entry.clone());
@@ -218,6 +255,7 @@ pub async fn search_modified_entries_attrs_filtered(
             }
         }
     }
+    let _ldap_result = search_stream.finish().await.success()?;
     Ok(search_entries)
 }
 
@@ -262,12 +300,12 @@ pub fn diff_attributes(
 
 #[cfg(test)]
 pub mod test {
-    use crate::sub::ldif::*;
-
     use super::*;
+    use crate::sub::ldap_result_codes::*;
+    use crate::sub::ldif::*;
     use indoc::*;
-    use ldap_test_server::{LdapServerBuilder, LdapServerConn};
     use ldap3::{LdapError, LdapResult};
+    use ldap_test_server::{LdapServerBuilder, LdapServerConn};
     use rstest::rstest;
 
     //use futures::executor::block_on;
@@ -282,7 +320,10 @@ pub mod test {
     ) {
         let result = diff_attributes(&attrs1, &attrs2);
         if result.len() != 0 {
-            panic!("attributes differ:\nattrs1: {:?},\nattrs2: {:?},\ndiff: {:?}", attrs1, attrs2, result);
+            panic!(
+                "attributes differ:\nattrs1: {:?},\nattrs2: {:?},\ndiff: {:?}",
+                attrs1, attrs2, result
+            );
         }
     }
 
@@ -296,8 +337,8 @@ pub mod test {
 
     pub fn assert_vec_search_entries_eq(entries1: &Vec<SearchEntry>, entries2: &Vec<SearchEntry>) {
         if entries1.len() != entries2.len() {
-            let dns1: Vec<_> = entries1.iter().map(|entry| entry.dn.to_string() ).collect();
-            let dns2: Vec<_> = entries2.iter().map(|entry| entry.dn.to_string() ).collect();
+            let dns1: Vec<_> = entries1.iter().map(|entry| entry.dn.to_string()).collect();
+            let dns2: Vec<_> = entries2.iter().map(|entry| entry.dn.to_string()).collect();
             panic!(
                 "different number of entries {} != {}, DNs1: {:?}, DNs2: {:?}",
                 entries1.len(),
@@ -383,12 +424,12 @@ pub mod test {
         server
     }
 
-    pub fn attr_names_to_lowercase(old_attrs: HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
+    pub fn attr_names_to_lowercase(
+        old_attrs: HashMap<String, Vec<String>>,
+    ) -> HashMap<String, Vec<String>> {
         let new_attrs = old_attrs
             .iter()
-            .map(|(name, values)| {
-                (name.to_lowercase(), values.clone())
-            })
+            .map(|(name, values)| (name.to_lowercase(), values.clone()))
             .collect();
         new_attrs
     }
@@ -406,7 +447,7 @@ pub mod test {
                 let mut search_entry = SearchEntry::construct(result_entry.clone());
                 search_entry.attrs = attr_names_to_lowercase(search_entry.attrs);
                 search_entry
-             })
+            })
             .collect();
         Ok(search_entries)
     }
@@ -490,8 +531,16 @@ pub mod test {
 
         let result = simple_connect(&service).await;
 
-        print!("result: {:?}", result);
-        assert!(matches!(&result, Err(LdapError::LdapResult{result: LdapResult { rc: 49, ..}})));
+        debug!("result: {:?}", result);
+        assert!(matches!(
+            &result,
+            Err(LdapError::LdapResult {
+                result: LdapResult {
+                    rc: RC_INVALID_CREDENTIALS!(),
+                    ..
+                }
+            })
+        ));
     }
 
     #[tokio::test]
@@ -539,16 +588,66 @@ pub mod test {
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let some_dn = "cn=xy012345,ou=Users,dc=test";
-        let some_result = search_one_entry_by_dn(&mut ldap_conn, some_dn)
+        let some_entry = search_one_entry_by_dn(&mut ldap_conn, some_dn)
             .await
             .unwrap();
-        assert!(some_result.is_some());
+        assert_eq!(some_entry.dn, some_dn);
+        let attrs = some_entry.attrs;
+        // OpenLDAP server returns attribute names in Camel-Case
+        assert_eq!(attrs.len(), 5);
+        assert_eq!(attrs.get("cn").unwrap()[0], "xy012345"); // generated from DN by OpenLDAP server
+        assert_eq!(attrs.get("objectClass").unwrap()[0], "inetOrgPerson");
+        assert_eq!(attrs.get("sn").unwrap()[0], "Müller");
+        assert_eq!(attrs.get("givenName").unwrap()[0], "André");
+        assert_eq!(attrs.get("userPassword").unwrap()[0], "hallowelt123!");
+    }
+
+    #[tokio::test]
+    async fn test_search_one_entry_by_dn_not_found() {
+        let _ = env_logger::try_init();
+
+        let plain_port = 17389;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret"
+        };
+
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let none_dn = "cn=ab012345,ou=Users,dc=test";
-        let none_result = search_one_entry_by_dn(&mut ldap_conn, none_dn)
-            .await
-            .unwrap();
-        assert!(none_result.is_none());
+        let none_result = search_one_entry_by_dn(&mut ldap_conn, none_dn).await;
+        debug!("none_result: {:?}", none_result);
+        //Err(LdapResult { result: LdapResult { rc: 32, matched: "ou=Users,dc=test", text: "", refs: [], ctrls: [] } })
+        assert!(matches!(
+            &none_result,
+            Err(LdapError::LdapResult {
+                result: LdapResult {
+                    rc: RC_NO_SUCH_OBJECT!(),
+                    ..
+                }
+            })
+        ));
     }
 
     #[tokio::test]
@@ -587,12 +686,9 @@ pub mod test {
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let dn = "cn=admin,dc=test";
-        let entry = search_one_entry_by_dn(&mut ldap_conn, dn)
-            .await
-            .unwrap()
-            .unwrap();
+        let entry = search_one_entry_by_dn(&mut ldap_conn, dn).await.unwrap();
+        debug!("entry: {:?}", entry);
         assert_eq!(entry.dn, dn);
-        print!("entry: {:?}", entry);
     }
 
     #[tokio::test]
@@ -645,8 +741,7 @@ pub mod test {
         let some_result = search_one_entry_by_dn_attrs_filtered(&mut ldap_conn, some_dn, &some_ex)
             .await
             .unwrap();
-        assert!(some_result.is_some());
-        let attrs = some_result.unwrap().attrs;
+        let attrs = some_result.attrs;
         debug!("attrs: {:?}", attrs);
         assert_eq!(attrs.len(), 3);
         assert!(attrs.contains_key("objectclass"));
@@ -655,14 +750,14 @@ pub mod test {
 
         let none_ex = Regex::new("^sn$").unwrap();
         let none_dn = "cn=ab012345,ou=Users,dc=test";
-        let none_result = search_one_entry_by_dn_attrs_filtered(&mut ldap_conn, none_dn, &none_ex)
-            .await
-            .unwrap();
-        assert!(none_result.is_none());
+        let none_result =
+            search_one_entry_by_dn_attrs_filtered(&mut ldap_conn, none_dn, &none_ex).await;
+        assert!(none_result.is_err());
+        // todo what kind of error????
     }
 
     #[tokio::test]
-    async fn test_search_modified_entries_attrs_filtered() {
+    async fn test_search_modified_entries_attrs_filtered_success() {
         let _ = env_logger::try_init();
         let plain_port = 21389;
         let url = format!("ldap://127.0.0.1:{}", plain_port);
@@ -710,12 +805,13 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
         let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
-        let expected_search_entries = parse_ldif_as_search_entries(indoc!{"
+        let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=new012345,ou=Users,dc=test
             objectclass: inetOrgPerson
             givenname: Amira
             userpassword: welt123!"
-        }).unwrap();
+        })
+        .unwrap();
 
         let search_entries = search_modified_entries_attrs_filtered(
             &mut ldap_conn,
@@ -735,6 +831,154 @@ pub mod test {
         assert!(attrs.contains_key("objectclass"));
         assert!(attrs.contains_key("givenname"));
         assert!(attrs.contains_key("userpassword"));
+    }
+
+
+    #[tokio::test]
+    async fn test_search_modified_entries_attrs_filtered_fail() {
+        let _ = env_logger::try_init();
+        let plain_port = 28389;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret"
+        };
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+        let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
+
+        let failed_result = search_modified_entries_attrs_filtered(
+            &mut ldap_conn,
+            "ou=Users,dc=test",
+            "20201231235959Z",
+            &ex,
+        )
+        .await;
+
+        debug!("failed_result: {:?}", failed_result);
+        assert!(matches!(
+            &failed_result,
+            Err(LdapError::LdapResult {
+                result: LdapResult {
+                    rc: RC_NO_SUCH_OBJECT!(),
+                    ..
+                }
+            })
+        ));
+
+    }
+
+    #[tokio::test]
+    async fn test_search_norm_dns_successful() {
+        let _ = env_logger::try_init();
+        let plain_port = 27389;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 19750101235958Z
+        
+            dn: cn=us012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: us012345
+            sn: Müller
+            modifyTimestamp: 19750101235959Z"
+        };
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+
+        let expected_dns: HashSet<String> = vec!["".to_string(), "cn=us012345".to_string()]
+            .into_iter()
+            .collect();
+
+        let norm_dns = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test")
+            .await
+            .unwrap();
+
+        assert_eq!(&norm_dns, &expected_dns);
+    }
+
+    #[tokio::test]
+    async fn test_search_norm_dns_base_dn_not_found() {
+        let _ = env_logger::try_init();
+        let plain_port = 29389;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret"
+        };
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: password,
+            base_dn: base_dn.clone(),
+        };
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+
+        let result = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test").await;
+
+        //debug!("result: {:?}", &result);
+        //Err(LdapResult { result: LdapResult { rc: 32, matched: "dc=test", text: "", refs: [], ctrls: [] } })
+        assert!(matches!(
+            &result,
+            Err(LdapError::LdapResult {
+                result: LdapResult {
+                    rc: RC_NO_SUCH_OBJECT!(),
+                    ..
+                }
+            })
+        ));
     }
 
     #[tokio::test]
@@ -838,7 +1082,8 @@ pub mod test {
             name: Magic Orchestra
             l: Frankfurt
             stateorprovincename: Hessen"
-        }).unwrap();
+        })
+        .unwrap();
         let target_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=entry,dc=test
             cn: entry
@@ -848,7 +1093,8 @@ pub mod test {
             name: Old Orchestra
             o: Hessischer Rundfunk
             stateorprovincename: Hessen"
-        }).unwrap();
+        })
+        .unwrap();
         let source_attrs = &source_entries[0].attrs;
         let target_attrs = &target_entries[0].attrs;
 
