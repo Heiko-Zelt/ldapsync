@@ -66,7 +66,7 @@ Only the following minimal JSON code is needed.
 export RUST_LOG=debug
 export JOB_SLEEP=10 sec
 export DRY_RUN=true
-export EXCLUDE_ATTRS='^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$'
+export EXCLUDE_ATTRS='^(?i)(authPassword.*|orclPassword|orclAci|orclEntryLevelAci)$'
 export VCAP_SERVICES='{
   "user-provided": [
     {

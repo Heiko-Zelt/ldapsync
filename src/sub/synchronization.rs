@@ -108,7 +108,7 @@ impl<'a> Synchronization<'a> {
             sync_statistics.modified += modi_statistics.modified;
         }
 
-        if sync_statistics.added != 0 && sync_statistics.modified != 0 && !self.dry_run {
+        if (sync_statistics.added != 0 || sync_statistics.modified != 0) && !self.dry_run {
             self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
                 .await
                 .unwrap();
@@ -122,12 +122,20 @@ impl<'a> Synchronization<'a> {
         ldap: &mut Ldap,
         sync_timestamp: &str,
     ) -> Result<LdapResult, LdapError> {
+        debug!(r#"save_sync_timestamp: saving sync timestamp: "{}")"#, sync_timestamp);
         let new_values = HashSet::from([sync_timestamp]);
         let modi = Mod::Replace(SYNC_TIMESTAMP_ATTR_NAME, new_values);
         let mods = vec![modi];
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
         let dn = join_2_dns(&self.sync_config.ts_dn, &ts_store_service.base_dn);
-        ldap.modify(&dn, mods).await
+        let result = ldap.modify(&dn, mods).await;
+        debug!(r#"save_sync_timestamp: result: "{:?}")"#, result);
+
+        match result {
+            Ok(LdapResult { rc: 0, ..}) => result,
+            Err(err) => Err(err),
+            _ => Err(LdapError::LdapResult { result: result.unwrap() }) // Ok with rc != 0 is an error too
+        }
     }
 
     /// adding extensibleClass allows the addition of any attribute to an entry
@@ -137,7 +145,7 @@ impl<'a> Synchronization<'a> {
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
         let ts_store_service_base_dn = &ts_store_service.base_dn;
         let dn = join_2_dns(&self.sync_config.ts_dn, ts_store_service_base_dn);
-        debug!("loading sync timestamp from dn: {}", dn);
+        debug!(r#"load_sync_timestamp: loading sync timestamp from dn: "{}""#, dn);
         let search_result = ldap
             .search(
                 &dn,
@@ -147,7 +155,7 @@ impl<'a> Synchronization<'a> {
             )
             .await?;
         let ldap_result = search_result.1;
-        debug!("LDAP result code: {}", ldap_result.rc);
+        debug!("load_sync_timestamp: LDAP result code: {}", ldap_result.rc);
         if ldap_result.rc != 0 {
             // Is result code ok?
             return Err(LdapError::LdapResult {
@@ -157,10 +165,10 @@ impl<'a> Synchronization<'a> {
 
         let result_entries = search_result.0;
         // todo pruefen: sollte genau 1 sein
-        debug!("number of entries: {}", result_entries.len());
+        debug!("load_sync_timestamp: found number of entries: {}", result_entries.len());
         let result_entry = result_entries[0].clone();
         let search_entry = SearchEntry::construct(result_entry);
-        debug!("entry: {:?}", search_entry);
+        debug!("load_sync_timestamp: entry: {:?}", search_entry);
         // todo check if there is exact one value
         let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap();
         let sync_timestamp_value = sync_timestamp_attr[0].clone();
@@ -185,7 +193,7 @@ impl<'a> Synchronization<'a> {
         sync_dn: &str,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
-        info!("sync_delete(source_base_dn: {:?}, target_base_dn: {:?}, sync_dn: {:?})", source_base_dn, target_base_dn, sync_dn);
+        info!(r#"sync_delete: source_base_dn: "{:?}", target_base_dn: "{:?}", sync_dn: "{:?}")"#, source_base_dn, target_base_dn, sync_dn);
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
         let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn).await?;
@@ -206,7 +214,7 @@ impl<'a> Synchronization<'a> {
                 // norm_dn ends with a comma if it is not empty
                 //let target_dn = format!("{}{}", norm_dn, target.base_dn);
                 let target_dn = join_3_dns(dn, sync_dn, target_base_dn);
-                info!(r#"deleting: "{}""#, target_dn);
+                info!(r#"sync_delete: deleting: "{}""#, target_dn);
                 if !dry_run {
                     target_ldap.delete(&target_dn).await?;
                 }
@@ -247,7 +255,7 @@ impl<'a> Synchronization<'a> {
         dry_run: bool,
     ) -> Result<ModiStatistics, LdapError> {
         debug!(
-            "sync_modify(source_base_dn: {:?}, target_base_dn: {:?}, sync_dn: {:?}, old_modify_timestamp: {:?})",
+            r#"sync_modify: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}", old_modify_timestamp: "{}")"#,
             source_base_dn, target_base_dn, sync_dn, old_modify_timestamp
         );
 
@@ -268,7 +276,7 @@ impl<'a> Synchronization<'a> {
         source_search_entries.sort_by(|a, b| a.dn.len().cmp(&b.dn.len()));
 
         info!(
-            "number of recently modified entries: {}",
+            "sync_modify: number of recently modified entries: {}",
             source_search_entries.len()
         );
 
@@ -304,9 +312,10 @@ impl<'a> Synchronization<'a> {
         dry_run: bool,
     ) -> Result<bool, LdapError> {
         // todo dont log userPassword!
-        debug!("sync_modify_one_entry(source entry: {:?})", source_search_entry);
+        debug!(r#"sync_modify_one_entry: source entry: {:?}"#, source_search_entry);
         if source_search_entry.bin_attrs.len() != 0 {
-            warn!("Ignoring attribute(s) with binary value in source entry: {:?}", source_search_entry);
+            // todo do not log passwords
+            warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry: {:?}"#, source_search_entry);
         }
 
         let mut trunc_dn = source_search_entry.dn.clone();
@@ -317,13 +326,13 @@ impl<'a> Synchronization<'a> {
         match &target_search_entry {
             Some(entry) => {
                 // todo dont log userPassword!
-                debug!("target entry exists: {:?})", &entry);
+                debug!(r#"sync_modify_one_entry: target entry exists: {:?})"#, &entry);
                 if entry.bin_attrs.len() != 0 {
-                    warn!("Ignoring attribute(s) with binary value in target entry: {:?}", entry);
+                    warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in target entry: {:?}"#, entry);
                 }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
                 // todo dont log the userPassword value as part of modifications!
-                info!("modifications: {:?}", mods);
+                info!(r#"sync_modify_one_entry: modifications: {:?}"#, mods);
                 // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
                 if !dry_run && !mods.is_empty() {
                     target_ldap.modify(&target_dn, mods).await?;
@@ -331,7 +340,7 @@ impl<'a> Synchronization<'a> {
                 Ok(true)
             }
             None => {
-                debug!("target entry did not exist");
+                debug!(r#"sync_modify_one_entry: target entry did not exist"#);
                 // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
                 let target_attrs = source_search_entry
                     .attrs
@@ -342,6 +351,7 @@ impl<'a> Synchronization<'a> {
                         (a, vs)
                     })
                     .collect::<Vec<(String, HashSet<String>)>>();
+                debug!(r#"sync_modify_one_entry: adding entry"#);
                 if !dry_run {
                     target_ldap.add(&target_dn, target_attrs).await?;
                 }

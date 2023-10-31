@@ -46,12 +46,27 @@ pub fn truncate_dn(dn: &mut String, base_dn_len: usize) {
     dn.truncate(dn.len() - base_dn_len - 1); // comma auch abschneiden
 }
 
+// todo handle connect failed
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
+    // returns type ldap3::result::Result<(LdapConnAsync, Ldap)>
+    // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<(LdapConnAsync, Ldap), LdapError>
+
     ldap3::drive!(conn);
-    ldap.simple_bind(&service.bind_dn, &service.password)
+    let ldap_result = ldap.simple_bind(&service.bind_dn, &service.password)
         .await?;
-    Ok(ldap)
+    // returns: ldap3::result::Result<LdapResult>
+    // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<LdapResult, LdapError>
+    // Enum ldap3::result::LdapError
+    // return code is in LdapResult
+
+    // LdapResult {result: LdapResult } is a variant of LdapError
+
+    if ldap_result.rc != 0 {
+        Err(LdapError::LdapResult { result: ldap_result })
+    } else {
+        Ok(ldap)
+    }
 }
 
 /// Converts the result entries of a ldap search into a set of DNs.
@@ -71,7 +86,7 @@ pub fn result_entries_to_norm_dns(
         let mut dn = search_entry.dn;
         truncate_dn(&mut dn, base_dn_len); // in bytes (not characters)
         let norm_dn = dn.to_lowercase();
-        debug!(r#"norm_dn: "{}""#, norm_dn);
+        debug!(r#"result_entries_to_norm_dns: norm_dn: "{}""#, norm_dn);
         norm_dns.insert(norm_dn);
     }
     norm_dns
@@ -82,7 +97,7 @@ pub async fn search_norm_dns(
     ldap_conn: &mut Ldap,
     base_dn: &str,
 ) -> Result<HashSet<String>, LdapError> {
-    debug!(r#"search for DNs from base: "{}""#, base_dn);
+    debug!(r#"search_norm_dns: search for DNs from base: "{}""#, base_dn);
     let search_result = ldap_conn
         .search(base_dn, Scope::Subtree, "(objectClass=*)", vec!["dn"])
         .await?;
@@ -95,7 +110,7 @@ pub async fn search_norm_dns(
     */
 
     let result_entries = search_result.0;
-    info!("found number of entries: {}", result_entries.len());
+    info!("search_norm_dns: found number of entries: {}", result_entries.len());
     let norm_dns = result_entries_to_norm_dns(&result_entries, base_dn);
     Ok(norm_dns)
 }
@@ -105,12 +120,12 @@ pub async fn search_one_entry_by_dn(
     ldap_conn: &mut Ldap,
     dn: &str,
 ) -> Result<Option<SearchEntry>, LdapError> {
-    debug!(r#"search entry by dn: "{}""#, dn);
+    debug!(r#"search_one_entry_by_dn: "{}""#, dn);
     let search_result = ldap_conn
         .search(dn, Scope::Base, "(objectClass=*)", vec!["*"])
         .await?;
     let result_entries = search_result.0;
-    debug!("found number of entries: {}", result_entries.len()); // should be 0 or 1
+    debug!("search_one_entry_by_dn: found number of entries: {}", result_entries.len()); // should be 0 or 1
     match result_entries.len() {
         0 => Ok(None),
         1 => {
@@ -118,7 +133,7 @@ pub async fn search_one_entry_by_dn(
             Ok(Some(search_entry))
         }
         _ => {
-            panic!("Found more than 1 entry.")
+            panic!("search_one_entry_by_dn: Found more than 1 entry.")
         }
     }
 }
@@ -167,6 +182,7 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
     match search_entry {
         Some(mut entry) => {
             entry.attrs = filter_attrs(&entry.attrs, exclude_attrs);
+            debug!("search_one_entry_by_dn_attrs_filtered: filtered attrs: {:?}", entry.attrs);
             Ok(Some(entry))
         }
         None => Ok(None),
@@ -251,6 +267,7 @@ pub mod test {
     use super::*;
     use indoc::*;
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
+    use ldap3::{LdapError, LdapResult};
     use rstest::rstest;
 
     //use futures::executor::block_on;
@@ -396,10 +413,11 @@ pub mod test {
 
     // todo write test for unsuccessful bind
     #[tokio::test]
-    async fn test_simple_connect() {
+    async fn test_simple_connect_successful() {
         let _ = env_logger::try_init();
 
-        let plain_port = 10389;
+        // todo write a function/sequence which returns an unused port/port within a range
+        let plain_port = 24389;
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
         let password = "secret".to_string();
@@ -435,6 +453,45 @@ pub mod test {
         //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
         let _ldap_conn = simple_connect(&service).await.unwrap();
         //debug!("ldap conn: {:?}", ldap_conn);
+    }
+
+    #[tokio::test]
+    async fn test_simple_connect_failed() {
+        let _ = env_logger::try_init();
+        let plain_port = 10389;
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let wrong_password = "secret2".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret1
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users"
+        };
+        let service = LdapService {
+            url: url,
+            bind_dn: bind_dn,
+            password: wrong_password,
+            base_dn: base_dn.clone(),
+        };
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+
+        let result = simple_connect(&service).await;
+
+        print!("result: {:?}", result);
+        assert!(matches!(&result, Err(LdapError::LdapResult{result: LdapResult { rc: 49, ..}})));
     }
 
     #[tokio::test]
