@@ -1,8 +1,8 @@
 use log::debug;
 use regex::Regex;
 use std::{collections::HashMap, env, env::VarError, str::FromStr, time::Duration};
-use crate::sub::cf_services::{map_ldap_services, parse_service_types, LdapService};
-use crate::sub::synchronization_config::SynchronizationConfig;
+use crate::cf_services::{map_ldap_services, parse_service_types, LdapService};
+use crate::synchronization_config::SynchronizationConfig;
 
 /// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
@@ -90,7 +90,7 @@ impl AppConfig {
                 env_var_name: VCAP_SERVICES.to_string(),
                 cause: err,
             })?;
-        debug!("VCAP_SERVICES: {:?}", vcap_services_str);
+        debug!("VCAP_SERVICES: {}", vcap_services_str);
         let vcap_service_types = parse_service_types(&vcap_services_str).map_err(|err| {
             AppConfigError::EnvVarParseJsonError {
                 env_var_name: SYNCHRONIZATIONS.to_string(),

@@ -1,8 +1,61 @@
-use crate::sub::cf_services::LdapService;
+use crate::cf_services::LdapService;
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering;
+
+pub fn debug_mods(mods: &Vec<Mod<String>>) -> String {
+    let mut v = Vec::new();
+    for modi in mods {
+      v.push(
+        match modi {
+          Mod::Add(name, values) => { format!("add: {} {}", name, values.len()) },
+          Mod::Delete(name, values) => { format!("delete: {} {}", name, values.len()) },
+          Mod::Replace(name, values) => { format!("replace: {} {}", name, values.len()) },
+          Mod::Increment(name, _) => { format!("increment: {}", name) },
+        }
+      )
+    };
+    format!("[{}]", v.join(", "))
+}
+
+pub fn debug_search_entry(search_entry: &SearchEntry) -> String {
+    let mut attrs_v = Vec::new();
+    let mut bin_attrs_v = Vec::new();
+
+    let mut attr_names_sorted: Vec<String> = search_entry.attrs.keys().cloned().collect();
+    attr_names_sorted.sort();
+    for name in attr_names_sorted {
+        let values = search_entry.attrs.get(&name).unwrap();
+        attrs_v.push(format!("{} {}", name, values.len()));
+    }
+
+    let mut bin_attr_names_sorted: Vec<String> = search_entry.bin_attrs.keys().cloned().collect();
+    bin_attr_names_sorted.sort();
+    for name in bin_attr_names_sorted {
+        let values = search_entry.bin_attrs.get(&name).unwrap();
+        bin_attrs_v.push(format!("{} {}", name, values.len()));
+    }
+    format!("dn: {}, attrs: [{}], bin_attrs: [{}]", search_entry.dn, attrs_v.join(", "), bin_attrs_v.join(", "))
+}
+
+pub fn compare_by_length_desc_then_alphabethical(a: &str, b: &str) -> Ordering {
+    let c = b.len().cmp(&a.len());
+    match c {
+        Ordering::Equal=> a.cmp(b),
+        Ordering::Less | Ordering::Greater => c,
+    }
+}
+
+// todo Sortierung muss auch alphabetisch sein, nicht nur nach Länge
+pub fn log_debug_dns(prefix: &str, dns: &HashSet<String>) {
+    let mut dns_sorted: Vec<&String> = dns.iter().collect();
+    dns_sorted.sort_by(|a ,b| compare_by_length_desc_then_alphabethical(a, b));
+    for dn in dns_sorted {
+        debug!(r#"{} "{}""#, prefix, dn);
+    };
+}
 
 /// Joins 2 distinguished names.
 /// Both parts may be empty strings.
@@ -86,14 +139,12 @@ pub fn result_entries_to_norm_dns(
 ) -> HashSet<String> {
     let base_dn_len = base_dn.len();
     let mut norm_dns = HashSet::new();
-    for result_entry in result_entries {
-        // debug!("result_entry: {:?}", result_entry); sehr kompliziertes Objekt
+    for result_entry in result_entries {        
         let search_entry = SearchEntry::construct(result_entry.clone());
-        //debug!("search_entry: {:?}", search_entry);
         let mut dn = search_entry.dn;
         truncate_dn(&mut dn, base_dn_len); // in bytes (not characters)
         let norm_dn = dn.to_lowercase();
-        debug!(r#"result_entries_to_norm_dns: norm_dn: "{}""#, norm_dn);
+        //debug!(r#"result_entries_to_norm_dns: norm_dn: "{}""#, norm_dn);
         norm_dns.insert(norm_dn);
     }
     norm_dns
@@ -213,8 +264,8 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
         Ok(mut entry) => {
             entry.attrs = filter_attrs(&entry.attrs, exclude_attrs);
             debug!(
-                "search_one_entry_by_dn_attrs_filtered: filtered attrs: {:?}",
-                entry.attrs
+                "search_one_entry_by_dn_attrs_filtered: filtered attrs: {}",
+                debug_search_entry(&entry)
             );
             Ok(entry)
         }
@@ -301,13 +352,14 @@ pub fn diff_attributes(
 #[cfg(test)]
 pub mod test {
     use super::*;
-    use crate::sub::ldap_result_codes::*;
-    use crate::sub::ldif::*;
+    use crate::ldap_result_codes::*;
+    use crate::ldif::*;
     use indoc::*;
     use ldap3::{LdapError, LdapResult};
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
     use rstest::rstest;
     use std::sync::Mutex;
+    use log::debug;
 
     // singleton pattern
     static PORT_SEQUENCE: Mutex<u16> = Mutex::new(1389);
@@ -323,12 +375,6 @@ pub mod test {
          result
     }
 
-    //use futures::executor::block_on;
-    //use tokio::runtime;
-    //use std::thread::sleep;
-    //use std::time::Duration;
-    use log::debug;
-
     /*
     #[test]
     pub fn test_mutex() {
@@ -337,6 +383,34 @@ pub mod test {
         println!("port: {}", next_port());
     }
     */
+
+    #[rstest]
+    #[case("A", "B", Ordering::Less)] // 'A' kommt vor 'B'
+    #[case("Hallo", "Hi", Ordering::Less)] // zuerst längere, dann kürzere
+    pub fn test_compare_by_length_desc_then_alphabethical(#[case] a: &str, #[case] b: &str, #[case] expected: Ordering) {
+        assert_eq!(compare_by_length_desc_then_alphabethical(a, b), expected);
+    }
+
+    #[test]
+    pub fn test_debug_mods() {
+        let mods = vec![
+            Mod::Delete("description".to_string(), HashSet::new()),
+            Mod::Delete("sn".to_string(), HashSet::new()),
+            Mod::Add("givenname".to_string(), HashSet::from(["Heinz".to_string()])),
+            Mod::Replace("instruments".to_string(), HashSet::from(["violin".to_string(), "clarinette".to_string()]))
+        ];
+        assert_eq!(debug_mods(&mods), "[delete: description 0, delete: sn 0, add: givenname 1, replace: instruments 2]");
+    }
+
+    #[test]
+    pub fn test_debug_search_entry() {
+        let search_entry = SearchEntry {
+            dn: "cn=us012345,cn=Users,dc=test".to_string(),
+            attrs: HashMap::from([("givenname".to_string(), vec!["Heinz".to_string()]), ("sn".to_string(), vec!["Müller".to_string()]), ("objectclass".to_string(), vec!["inetorgperson".to_string(), "top".to_string()])]),
+            bin_attrs: HashMap::from([]),
+        };
+        assert_eq!(debug_search_entry(&search_entry), "dn: cn=us012345,cn=Users,dc=test, attrs: [givenname 1, objectclass 2, sn 1], bin_attrs: []");
+    }
 
     pub fn assert_attrs_eq(
         attrs1: &HashMap<String, Vec<String>>,

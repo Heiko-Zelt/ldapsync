@@ -4,10 +4,10 @@ use log::{debug, info, warn};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
-use crate::sub::cf_services::LdapService;
-use crate::sub::ldap_utils::*;
-use crate::sub::ldap_result_codes::*;
-use crate::sub::synchronization_config::SynchronizationConfig;
+use crate::cf_services::LdapService;
+use crate::ldap_utils::*;
+use crate::ldap_result_codes::*;
+use crate::synchronization_config::SynchronizationConfig;
 
 /// The object class "extensibleObject" is defined in OpenLdap core schema.
 /// So there is no need to extend the schema with an own object class.
@@ -150,10 +150,11 @@ impl<'a> Synchronization<'a> {
             .search(
                 &dn,
                 Scope::Base,
-                &format!("(objectClass={})", SYNC_TIMESTAMP_OBJ_CLASS),
+                &format!("(objectClass=*)"),
                 vec![SYNC_TIMESTAMP_ATTR_NAME],
             )
             .await?.success()?;
+        /*
         let ldap_result = search_result.1;
         debug!("load_sync_timestamp: LDAP result code: {}", ldap_result.rc);
         if ldap_result.rc != 0 {
@@ -162,16 +163,18 @@ impl<'a> Synchronization<'a> {
                 result: ldap_result,
             });
         }
+        */
 
         let result_entries = search_result.0;
         // todo pruefen: sollte genau 1 sein
         debug!("load_sync_timestamp: found number of entries: {}", result_entries.len());
         let result_entry = result_entries[0].clone();
         let search_entry = SearchEntry::construct(result_entry);
-        debug!("load_sync_timestamp: entry: {:?}", search_entry);
+        //debug!("load_sync_timestamp: entry: {:?}", search_entry);
         // todo check if there is exact one value
         let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap(); // todo: panic oder Fehler zurückgeben?
         let sync_timestamp_value = sync_timestamp_attr[0].clone();
+        debug!("timestamp: {}", sync_timestamp_value);
         Ok(sync_timestamp_value)
     }
 
@@ -197,6 +200,10 @@ impl<'a> Synchronization<'a> {
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
         let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn).await?;
+        
+        debug!("sync_delete: target DNs:");
+        // todo nur ausführen, wenn log level debug
+        log_debug_dns("sync_delete:", &target_norm_dns);
 
         // Wenn es im Ziel-System keine Einträge gibt, kann auch nichts gelöscht werden.
         if target_norm_dns.len() == 0 {
@@ -204,11 +211,14 @@ impl<'a> Synchronization<'a> {
         } else {
             let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
             let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn).await?;
+            debug!("sync_delete: source DNs:");
+            // todo nur ausführen, wenn log level debug
+            log_debug_dns("sync_delete:", &source_norm_dns);
             let garbage_diff = target_norm_dns.difference(&source_norm_dns);
             let mut garbage_vec: Vec<&String> = garbage_diff.collect();
 
             // Von den Blättern zur Wurzel, längere DNs zuerst sortieren. Absteigend nach Länge der DNs.
-            garbage_vec.sort_by(|a, b| b.len().cmp(&a.len()));
+            garbage_vec.sort_by(|a ,b| compare_by_length_desc_then_alphabethical(a, b));
 
             for dn in garbage_vec.iter() {
                 // norm_dn ends with a comma if it is not empty
@@ -312,7 +322,7 @@ impl<'a> Synchronization<'a> {
         dry_run: bool,
     ) -> Result<bool, LdapError> {
         // todo dont log userPassword!
-        debug!(r#"sync_modify_one_entry: source entry: {:?}"#, source_search_entry);
+        debug!(r#"sync_modify_one_entry: source entry: {}"#, debug_search_entry(&source_search_entry));
         if source_search_entry.bin_attrs.len() != 0 {
             // todo do not log passwords
             warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry: {:?}"#, source_search_entry);
@@ -326,13 +336,16 @@ impl<'a> Synchronization<'a> {
         match target_search_result {
             Ok(entry) => {
                 // todo dont log userPassword!
-                debug!(r#"sync_modify_one_entry: target entry exists: {:?})"#, &entry);
+                debug!(r#"sync_modify_one_entry: target entry exists: {})"#, debug_search_entry(&entry));
                 if entry.bin_attrs.len() != 0 {
-                    warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in target entry: {:?}"#, entry);
+                    warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry"#);
                 }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
-                // todo dont log the userPassword value as part of modifications!
-                info!(r#"sync_modify_one_entry: modifications: {:?}"#, mods);
+                if mods.len() == 0 {
+                    debug!(r#"sync_modify_one_entry: no differences found"#);    
+                } else {
+                    info!(r#"sync_modify_one_entry: modifications: {:?}"#, debug_mods(&mods));
+                }
                 // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
                 if !dry_run && !mods.is_empty() {
                     target_ldap.modify(&target_dn, mods).await?;
@@ -356,7 +369,7 @@ impl<'a> Synchronization<'a> {
                         (a, vs)
                     })
                     .collect::<Vec<(String, HashSet<String>)>>();
-                debug!(r#"sync_modify_one_entry: adding entry"#);
+                info!(r#"sync_modify_one_entry: adding entry: {}"#, debug_search_entry(&source_search_entry));
                 if !dry_run {
                     target_ldap.add(&target_dn, target_attrs).await?;
                 }
@@ -370,10 +383,10 @@ impl<'a> Synchronization<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sub::ldap_utils::simple_connect;
-    use crate::sub::ldap_utils::test::{start_test_server, search_all, assert_vec_search_entries_eq, next_port};
-    use crate::sub::ldif::parse_ldif_as_search_entries;
-    use crate::sub::synchronization_config::SynchronizationConfig;
+    use crate::ldap_utils::simple_connect;
+    use crate::ldap_utils::test::{start_test_server, search_all, assert_vec_search_entries_eq, next_port};
+    use crate::ldif::parse_ldif_as_search_entries;
+    use crate::synchronization_config::SynchronizationConfig;
     use indoc::*;
   
 
@@ -693,12 +706,10 @@ mod test {
         assert_eq!(result, 2);
 
         let source_search_entries = search_all(&mut source_ldap, &source_base_dn).await.unwrap();
-        // todo dont log userPassword!
         debug!("source entries {:?}", source_search_entries);
         assert_vec_search_entries_eq(&source_search_entries, &expected_source_entries);
 
         let target_search_entries = search_all(&mut target_ldap, &target_base_dn).await.unwrap();
-        // todo dont log userPassword!
         debug!("target entries {:?}", target_search_entries);
         assert_vec_search_entries_eq(&target_search_entries, &expected_target_entries);
     }
