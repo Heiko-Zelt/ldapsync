@@ -19,15 +19,31 @@ pub const SYNC_TIMESTAMP_ATTR_NAME: &str = "name";
 /// in the last run.
 #[derive(Debug)]
 pub struct SyncStatistics {
+    /// number of entries found, with newer modifyTimestamp than on last successful run
+    pub recently_modified: usize,
+
+    /// number of entries added
     pub added: usize,
-    pub modified: usize,
+
+    /// number of really modified entries (after comparison of relevant attributes and values)
+    pub attrs_modified: usize,
+
+    /// number of entries deleted
     pub deleted: usize
 }
 
 #[derive(Debug)]
 pub struct ModiStatistics {
+    pub recently_modified: usize,
     pub added: usize,
-    pub modified: usize,
+    pub attrs_modified: usize,
+}
+
+#[derive(Debug)]
+pub enum ModiOne {
+    Added,
+    AttrsModified,
+    Unchanged,
 }
 
 // Referenced source and target LdapServices have to live as long as this struct
@@ -66,7 +82,7 @@ impl<'a> Synchronization<'a> {
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
 
-        let mut sync_statistics = SyncStatistics { added: 0, modified: 0, deleted: 0 };
+        let mut sync_statistics = SyncStatistics { recently_modified: 0, added: 0, attrs_modified: 0, deleted: 0 };
         let mut source_ldap = simple_connect(source_service).await?;
         let mut target_ldap = simple_connect(target_service).await?;
         let mut ts_store_ldap = simple_connect(ts_store_service).await?;
@@ -105,11 +121,12 @@ impl<'a> Synchronization<'a> {
                 self.dry_run,
             )
             .await?;
+            sync_statistics.recently_modified += modi_statistics.recently_modified;
             sync_statistics.added += modi_statistics.added;
-            sync_statistics.modified += modi_statistics.modified;
+            sync_statistics.attrs_modified += modi_statistics.attrs_modified;
         }
 
-        if (sync_statistics.added != 0 || sync_statistics.modified != 0) && !self.dry_run {
+        if (sync_statistics.recently_modified != 0) && !self.dry_run {
             self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
                 .await?;
         }
@@ -268,9 +285,6 @@ impl<'a> Synchronization<'a> {
             r#"sync_modify: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}", old_modify_timestamp: "{}")"#,
             source_base_dn, target_base_dn, sync_dn, old_modify_timestamp
         );
-
-        let mut modi_statistics = ModiStatistics { added: 0, modified: 0 };
-
         // im Quell-LDAP alle neulich geänderten Einträge suchen
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
 
@@ -281,6 +295,8 @@ impl<'a> Synchronization<'a> {
             exclude_attrs,
         )
         .await?;
+
+        let mut modi_statistics = ModiStatistics { recently_modified: source_search_entries.len(), added: 0, attrs_modified: 0 };
 
         // Von der Wurzel zu den Blättern, kürzere DNs zuerst sortieren. Austeigend nach Länger der DNs.
         source_search_entries.sort_by(|a, b| a.dn.len().cmp(&b.dn.len()));
@@ -301,10 +317,10 @@ impl<'a> Synchronization<'a> {
                 dry_run,
             )
             .await?;
-            if modified {
-                modi_statistics.modified += 1;
-            } else {
-                modi_statistics.added += 1;
+            match modified {
+                ModiOne::Unchanged => {},
+                ModiOne::Added => modi_statistics.added += 1,
+                ModiOne::AttrsModified => modi_statistics.attrs_modified += 1,
             }
         }
         // todo korrekte Anzahl zurückgeben
@@ -320,7 +336,7 @@ impl<'a> Synchronization<'a> {
         source_search_entry: SearchEntry,
         exclude_attrs: &Regex,
         dry_run: bool,
-    ) -> Result<bool, LdapError> {
+    ) -> Result<ModiOne, LdapError> {
         // todo dont log userPassword!
         debug!(r#"sync_modify_one_entry: source entry: {}"#, debug_search_entry(&source_search_entry));
         if source_search_entry.bin_attrs.len() != 0 {
@@ -335,22 +351,21 @@ impl<'a> Synchronization<'a> {
             search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await;
         match target_search_result {
             Ok(entry) => {
-                // todo dont log userPassword!
                 debug!(r#"sync_modify_one_entry: target entry exists: {})"#, debug_search_entry(&entry));
                 if entry.bin_attrs.len() != 0 {
                     warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry"#);
                 }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
-                if mods.len() == 0 {
-                    debug!(r#"sync_modify_one_entry: no differences found"#);    
-                } else {
-                    info!(r#"sync_modify_one_entry: modifications: {:?}"#, debug_mods(&mods));
+                if mods.is_empty() {
+                    debug!(r#"sync_modify_one_entry: no differences found"#);
+                    return Ok(ModiOne::Unchanged);
                 }
+                info!(r#"sync_modify_one_entry: modifications: {:?}"#, debug_mods(&mods));
                 // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
-                if !dry_run && !mods.is_empty() {
+                if !dry_run {
                     target_ldap.modify(&target_dn, mods).await?;
                 }
-                Ok(true)
+                Ok(ModiOne::AttrsModified)
             }
             Err(LdapError::LdapResult { // no problem => add entry
                 result: LdapResult {
@@ -373,9 +388,9 @@ impl<'a> Synchronization<'a> {
                 if !dry_run {
                     target_ldap.add(&target_dn, target_attrs).await?;
                 }
-                Ok(false)
+                Ok(ModiOne::Added)
             }
-            Err(err) => return Err(err)
+            Err(err) => return Err(err) // other return code
         }
     }
 }
@@ -425,12 +440,14 @@ mod test {
             o: de
             modifyTimestamp: 20231019182737Z
 
+            # to be added
             dn: o=AB,o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
             o: AB
             modifyTimestamp: 20231019182738Z
             
+            # to be added
             dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
             objectClass: inetOrgPerson
             sn: Müller
@@ -456,21 +473,26 @@ mod test {
             sn: Admin
             userPassword: secret
     
+            # no modifications
             dn: ou=Users,dc=test
             objectClass: top
             objectClass: organizationalUnit
             ou: Users
         
+            # differs
             dn: o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
             o: de
+            description: added a description
 
+            # ignored
             dn: o=XY,o=de,ou=Users,dc=test
             objectClass: top
             objectClass: organization
             o: XY
 
+            # ignored
             dn: cn=xy012345,o=XY,o=de,ou=Users,dc=test
             objectClass: inetOrgPerson
             sn: Müller
@@ -524,9 +546,9 @@ mod test {
         )
         .await.unwrap();
         info!("result: {:?}", result);
+        assert_eq!(result.recently_modified, 4);
         assert_eq!(result.added, 2);
-        assert_eq!(result.modified, 2);
-        // todo assert_eq 3 oder 4 inklusive cn=Users?
+        assert_eq!(result.attrs_modified, 1);
     }
 
 
@@ -1209,8 +1231,9 @@ mod test {
 
         let result = synchronization.synchronize().await.unwrap();
         info!("result: {:?}", result);
+        assert_eq!(result.recently_modified, 4);
         assert_eq!(result.added, 2);
-        assert_eq!(result.modified, 2);
+        assert_eq!(result.attrs_modified, 2);
         assert_eq!(result.deleted, 2);
 
         let mut target_ldap = simple_connect(&target_service).await.unwrap();

@@ -44,8 +44,8 @@ async fn main() {
                     let result = synchro.synchronize().await;
                     match result {
                         Ok(stats) => info!(
-                            "Synchronization was successful. Entries added: {}, modified: {}, deleted: {}",
-                            stats.added, stats.modified, stats.deleted
+                            "Synchronization was successful. Entires recently modified: {}, added: {}, attributes modified: {}, deleted: {}",
+                            stats.recently_modified, stats.added, stats.attrs_modified, stats.deleted
                         ),
                         Err(err) => {
                             error!("Synchronization failed. {:?}", err);
