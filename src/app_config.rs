@@ -57,8 +57,7 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-
-    /// read env vars, parse UTF8 strings and store the result in a map
+    /// read relevant environment variables, parse UTF8 strings and store the result in a map
     fn read_env_vars() -> Result<HashMap<&'static str, String>, AppConfigError> {
         let mut env_map = HashMap::new();
         let allowed_var_names = [
@@ -77,28 +76,13 @@ impl AppConfig {
                 Err(VarError::NotPresent) => {}
                 Err(err) => {
                     return Err(AppConfigError::EnvVarError {
-                        env_var_name: EXCLUDE_ATTRS.to_string(),
+                        env_var_name: name.to_string(),
                         cause: err,
                     });
                 }
             }
         }
         Ok(env_map)
-    }
-
-    /// example input "15 min" or "10 sec"
-    fn parse_duration(hay: &str) -> Option<Duration> {
-        let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap(); // assumption: works always or never
-        let captures = re.captures(hay)?;
-
-        let number_str = captures.get(1).unwrap().as_str();
-        let unit_str = captures.get(2).unwrap().as_str();
-        let number = number_str.parse().unwrap();
-        if unit_str == "sec" {
-            Some(Duration::from_secs(number))
-        } else {
-            Some(Duration::from_secs(number * 60))
-        }
     }
 
     /// check some conditions
@@ -129,6 +113,21 @@ impl AppConfig {
         None
     }
 
+    /// example input "15 min" or "10 sec"
+    fn parse_duration(hay: &str) -> Option<Duration> {
+        let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap(); // assumption: works always or never
+        let captures = re.captures(hay)?;
+
+        let number_str = captures.get(1).unwrap().as_str();
+        let unit_str = captures.get(2).unwrap().as_str();
+        let number = number_str.parse().unwrap();
+        if unit_str == "sec" {
+            Some(Duration::from_secs(number))
+        } else {
+            Some(Duration::from_secs(number * 60))
+        }
+    }
+
     /// parse regular expesssions, booleans and JSON code in the configuration
     fn parse(param_map: HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
         let synchronizations_vec = match param_map.get(SYNCHRONIZATIONS) {
@@ -140,13 +139,13 @@ impl AppConfig {
                         cause: err,
                     }
                 })?
-            },
+            }
             None => {
                 return Err(AppConfigError::EnvVarError {
                     env_var_name: SYNCHRONIZATIONS.to_string(),
                     cause: VarError::NotPresent,
                 })
-            },
+            }
         };
 
         let vcap_service_types = match param_map.get(VCAP_SERVICES) {
@@ -154,7 +153,7 @@ impl AppConfig {
                 //don't log passwords
                 //debug!("{}: {}", VCAP_SERVICES, s);
                 parse_service_types(s).map_err(|err| AppConfigError::EnvVarParseJsonError {
-                    env_var_name: SYNCHRONIZATIONS.to_string(),
+                    env_var_name: VCAP_SERVICES.to_string(),
                     cause: err,
                 })?
             }
@@ -179,44 +178,40 @@ impl AppConfig {
                         cause: err,
                     })?,
                 )
-            },
+            }
             None => None,
         };
 
         let daemon_bool = match param_map.get(DAEMON) {
-            Some(s) => {
-                bool::from_str(s).map_err(|_| AppConfigError::EnvVarParseError {
-                    env_var_name: DAEMON.to_string(),
-                })?
-            },
+            Some(s) => bool::from_str(s).map_err(|_| AppConfigError::EnvVarParseError {
+                env_var_name: DAEMON.to_string(),
+            })?,
             None => {
                 return Err(AppConfigError::EnvVarError {
                     env_var_name: DAEMON.to_string(),
                     cause: VarError::NotPresent,
                 })
-            },
+            }
         };
 
         let dry_run_bool = match param_map.get(DRY_RUN) {
-            Some(s) => {
-                bool::from_str(s).map_err(|_| AppConfigError::EnvVarParseError {
-                    env_var_name: DRY_RUN.to_string(),
-                })?
-            },
+            Some(s) => bool::from_str(s).map_err(|_| AppConfigError::EnvVarParseError {
+                env_var_name: DRY_RUN.to_string(),
+            })?,
             None => {
                 return Err(AppConfigError::EnvVarError {
                     env_var_name: DRY_RUN.to_string(),
                     cause: VarError::NotPresent,
                 })
-            },
+            }
         };
 
         let job_sleep_duration = match param_map.get(JOB_SLEEP) {
-            Some(s) => {
-                Some(Self::parse_duration(s).ok_or(AppConfigError::EnvVarParseError {
+            Some(s) => Some(
+                Self::parse_duration(s).ok_or(AppConfigError::EnvVarParseError {
                     env_var_name: JOB_SLEEP.to_string(),
-                })?)
-            },
+                })?,
+            ),
             None => None,
         };
 
@@ -249,7 +244,6 @@ impl AppConfig {
         }
         Ok(config)
     }
-
 }
 
 #[cfg(test)]
@@ -258,7 +252,9 @@ mod test {
     use indoc::*;
     use rstest::*;
 
-    // todo write unit tests with errors in configuration. Are error messages user friendly?
+    // todo write more unit tests
+    // - valid with differen combinations of parameters
+    // - with errors in configuration. Are error messages user friendly?
     #[test]
     fn test_from_cf_env_valid() {
         env::set_var("LS_DAEMON", "true");
