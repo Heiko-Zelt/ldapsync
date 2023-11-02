@@ -1,15 +1,16 @@
+use crate::cf_services::{map_ldap_services, parse_service_types, LdapService};
+use crate::synchronization_config::SynchronizationConfig;
 use log::debug;
 use regex::Regex;
 use std::{collections::HashMap, env, env::VarError, str::FromStr, time::Duration};
-use crate::cf_services::{map_ldap_services, parse_service_types, LdapService};
-use crate::synchronization_config::SynchronizationConfig;
 
 /// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
-pub const SYNCHRONIZATIONS: &str = "SYNCHRONIZATIONS";
-pub const EXCLUDE_ATTRS: &str = "EXCLUDE_ATTRS";
-pub const JOB_SLEEP: &str = "JOB_SLEEP";
-pub const DRY_RUN: &str = "DRY_RUN";
+pub const SYNCHRONIZATIONS: &str = "LS_SYNCHRONIZATIONS";
+pub const DAEMON: &str = "LS_DAEMON";
+pub const EXCLUDE_ATTRS: &str = "LS_EXCLUDE_ATTRS";
+pub const JOB_SLEEP: &str = "LS_SLEEP";
+pub const DRY_RUN: &str = "LS_DRY_RUN";
 
 #[derive(Debug)]
 pub enum LdapServiceUsage {
@@ -40,21 +41,53 @@ pub enum AppConfigError {
         synchronisation_index: usize,
         usage: LdapServiceUsage,
     },
-    LdapServiceNameNotUnique
+    LdapServiceNameNotUnique,
+    DaemonButNoSleep,
+    SleepButNoDaemon,
 }
 
 #[derive(Debug)]
 pub struct AppConfig {
-    pub job_sleep: Duration,
+    pub daemon: bool,
+    pub job_sleep: Option<Duration>,
     pub dry_run: bool,
-    pub exclude_attrs: Regex,
+    pub exclude_attrs: Option<Regex>,
     pub ldap_services: HashMap<String, LdapService>,
     pub synchronization_configs: Vec<SynchronizationConfig>,
 }
 
 impl AppConfig {
+
+    /// read env vars, parse UTF8 strings and store the result in a map
+    fn read_env_vars() -> Result<HashMap<&'static str, String>, AppConfigError> {
+        let mut env_map = HashMap::new();
+        let allowed_var_names = [
+            VCAP_SERVICES,
+            SYNCHRONIZATIONS,
+            DAEMON,
+            EXCLUDE_ATTRS,
+            JOB_SLEEP,
+            DRY_RUN,
+        ];
+        for name in allowed_var_names {
+            match env::var(name) {
+                Ok(v) => {
+                    env_map.insert(name, v);
+                }
+                Err(VarError::NotPresent) => {}
+                Err(err) => {
+                    return Err(AppConfigError::EnvVarError {
+                        env_var_name: EXCLUDE_ATTRS.to_string(),
+                        cause: err,
+                    });
+                }
+            }
+        }
+        Ok(env_map)
+    }
+
     /// example input "15 min" or "10 sec"
-    pub fn parse_duration(hay: &str) -> Option<Duration> {
+    fn parse_duration(hay: &str) -> Option<Duration> {
         let re = Regex::new(r" *([0-9]+) *(sec|min) *").unwrap(); // assumption: works always or never
         let captures = re.captures(hay)?;
 
@@ -68,105 +101,155 @@ impl AppConfig {
         }
     }
 
-    pub fn from_cf_env() -> Result<AppConfig, AppConfigError> {
-        debug!("from_cf_env()");
-
-        let synchronizations_str =
-            env::var(SYNCHRONIZATIONS).map_err(|err| AppConfigError::EnvVarError {
-                env_var_name: SYNCHRONIZATIONS.to_string(),
-                cause: err,
-            })?;
-        debug!("SYNCHRONIZATIONS: {}", synchronizations_str);
-        let synchronizations_vec = SynchronizationConfig::parse_synchronizations(
-            &synchronizations_str,
-        )
-        .map_err(|err| AppConfigError::EnvVarParseJsonError {
-            env_var_name: SYNCHRONIZATIONS.to_string(),
-            cause: err,
-        })?;
-
-        let vcap_services_str =
-            env::var(VCAP_SERVICES).map_err(|err| AppConfigError::EnvVarError {
-                env_var_name: VCAP_SERVICES.to_string(),
-                cause: err,
-            })?;
-        debug!("VCAP_SERVICES: {}", vcap_services_str);
-        let vcap_service_types = parse_service_types(&vcap_services_str).map_err(|err| {
-            AppConfigError::EnvVarParseJsonError {
-                env_var_name: SYNCHRONIZATIONS.to_string(),
-                cause: err,
-            }
-        })?;
-        let ldap_services_map = map_ldap_services(&vcap_service_types.user_provided)
-            .map_err(|_| AppConfigError::LdapServiceNameNotUnique)?;
-        debug!("ldap services by names: {:?}", ldap_services_map);
-
-        for (index, sync_config) in synchronizations_vec.iter().enumerate() {
-            if !ldap_services_map.contains_key(&sync_config.source) {
-                return Err(AppConfigError::LdapServiceMissing {
+    /// check some conditions
+    fn analyze_semantic(&self) -> Option<AppConfigError> {
+        if self.daemon && self.job_sleep.is_none() {
+            return Some(AppConfigError::DaemonButNoSleep);
+        }
+        if !self.daemon && self.job_sleep.is_some() {
+            return Some(AppConfigError::SleepButNoDaemon);
+        }
+        // is an LDAP service configured for every service name (source and target) reference?
+        for (index, sync_config) in self.synchronization_configs.iter().enumerate() {
+            if !self.ldap_services.contains_key(&sync_config.source) {
+                return Some(AppConfigError::LdapServiceMissing {
                     service_name: sync_config.source.clone(),
                     synchronisation_index: index,
                     usage: LdapServiceUsage::Source,
                 });
             }
-            if !ldap_services_map.contains_key(&sync_config.target) {
-                return Err(AppConfigError::LdapServiceMissing {
+            if !self.ldap_services.contains_key(&sync_config.target) {
+                return Some(AppConfigError::LdapServiceMissing {
                     service_name: sync_config.target.clone(),
                     synchronisation_index: index,
                     usage: LdapServiceUsage::Target,
                 });
             }
-            if !ldap_services_map.contains_key(&sync_config.ts_store) {
-                return Err(AppConfigError::LdapServiceMissing {
-                    service_name: sync_config.target.clone(),
-                    synchronisation_index: index,
-                    usage: LdapServiceUsage::TsStore,
-                });
-            }
         }
+        None
+    }
 
-        let exclude_attrs_str =
-            env::var(EXCLUDE_ATTRS).map_err(|err| AppConfigError::EnvVarError {
-                env_var_name: EXCLUDE_ATTRS.to_string(),
-                cause: err,
-            })?;
-        debug!("EXCLUDE_ATTRS: {}", exclude_attrs_str);
-        let exclude_attrs_pattern = Regex::new(&exclude_attrs_str).map_err(|err| {
-            AppConfigError::EnvVarParseRegexError {
-                env_var_name: EXCLUDE_ATTRS.to_string(),
-                cause: err,
+    /// parse regular expesssions, booleans and JSON code in the configuration
+    fn parse(param_map: HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
+        let synchronizations_vec = match param_map.get(SYNCHRONIZATIONS) {
+            Some(s) => {
+                debug!("{}: {}", SYNCHRONIZATIONS, s);
+                SynchronizationConfig::parse_synchronizations(&s).map_err(|err| {
+                    AppConfigError::EnvVarParseJsonError {
+                        env_var_name: SYNCHRONIZATIONS.to_string(),
+                        cause: err,
+                    }
+                })?
+            },
+            None => {
+                return Err(AppConfigError::EnvVarError {
+                    env_var_name: SYNCHRONIZATIONS.to_string(),
+                    cause: VarError::NotPresent,
+                })
+            },
+        };
+
+        let vcap_service_types = match param_map.get(VCAP_SERVICES) {
+            Some(s) => {
+                //don't log passwords
+                //debug!("{}: {}", VCAP_SERVICES, s);
+                parse_service_types(s).map_err(|err| AppConfigError::EnvVarParseJsonError {
+                    env_var_name: SYNCHRONIZATIONS.to_string(),
+                    cause: err,
+                })?
             }
-        })?;
+            None => {
+                return Err(AppConfigError::EnvVarError {
+                    env_var_name: VCAP_SERVICES.to_string(),
+                    cause: VarError::NotPresent,
+                })
+            }
+        };
+        let ldap_services_map = map_ldap_services(&vcap_service_types.user_provided)
+            .map_err(|_| AppConfigError::LdapServiceNameNotUnique)?;
+        //don't log passwords
+        //debug!("ldap services by names: {:?}", ldap_services_map);
 
-        let job_sleep_str = env::var(JOB_SLEEP).map_err(|err| AppConfigError::EnvVarError {
-            env_var_name: JOB_SLEEP.to_string(),
-            cause: err,
-        })?;
-        debug!("JOB_SLEEP: {}", job_sleep_str);
-        let job_sleep_duration =
-            Self::parse_duration(&job_sleep_str).ok_or(AppConfigError::EnvVarParseError {
-                env_var_name: JOB_SLEEP.to_string(),
-            })?;
+        let exclude_attrs_pattern = match param_map.get(EXCLUDE_ATTRS) {
+            Some(s) => {
+                debug!("{}: {}", EXCLUDE_ATTRS, s);
+                Some(
+                    Regex::new(&s).map_err(|err| AppConfigError::EnvVarParseRegexError {
+                        env_var_name: EXCLUDE_ATTRS.to_string(),
+                        cause: err,
+                    })?,
+                )
+            },
+            None => None,
+        };
 
-        let dry_run_str = env::var(DRY_RUN).map_err(|err| AppConfigError::EnvVarError {
-            env_var_name: DRY_RUN.to_string(),
-            cause: err,
-        })?;
-        debug!("DRY_RUN: {}", dry_run_str);
-        let dry_run_bool =
-            bool::from_str(&dry_run_str).map_err(|_| AppConfigError::EnvVarParseError {
-                env_var_name: DRY_RUN.to_string(),
-            })?;
+        let daemon_bool = match param_map.get(DAEMON) {
+            Some(s) => {
+                bool::from_str(s).map_err(|_| AppConfigError::EnvVarParseError {
+                    env_var_name: DAEMON.to_string(),
+                })?
+            },
+            None => {
+                return Err(AppConfigError::EnvVarError {
+                    env_var_name: DAEMON.to_string(),
+                    cause: VarError::NotPresent,
+                })
+            },
+        };
+
+        let dry_run_bool = match param_map.get(DRY_RUN) {
+            Some(s) => {
+                bool::from_str(s).map_err(|_| AppConfigError::EnvVarParseError {
+                    env_var_name: DRY_RUN.to_string(),
+                })?
+            },
+            None => {
+                return Err(AppConfigError::EnvVarError {
+                    env_var_name: DRY_RUN.to_string(),
+                    cause: VarError::NotPresent,
+                })
+            },
+        };
+
+        let job_sleep_duration = match param_map.get(JOB_SLEEP) {
+            Some(s) => {
+                Some(Self::parse_duration(s).ok_or(AppConfigError::EnvVarParseError {
+                    env_var_name: JOB_SLEEP.to_string(),
+                })?)
+            },
+            None => None,
+        };
 
         let config = AppConfig {
+            daemon: daemon_bool,
             job_sleep: job_sleep_duration,
             dry_run: dry_run_bool,
             exclude_attrs: exclude_attrs_pattern,
             ldap_services: ldap_services_map,
             synchronization_configs: synchronizations_vec,
         };
+
         Ok(config)
     }
+
+    pub fn from_cf_env() -> Result<AppConfig, AppConfigError> {
+        debug!("from_cf_env()");
+        let env_map = Self::read_env_vars()?;
+        Self::from_map(env_map)
+    }
+
+    // Read configuration from a map instead of environment variables
+    // that's very useful for unit tests, because the environment is a singleton.
+    // tests which run in parallel, can't use the environment.
+    pub fn from_map(param_map: HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
+        let config = Self::parse(param_map)?;
+        match config.analyze_semantic() {
+            Some(err) => return Err(err),
+            None => {}
+        }
+        Ok(config)
+    }
+
 }
 
 #[cfg(test)]
@@ -178,10 +261,11 @@ mod test {
     // todo write unit tests with errors in configuration. Are error messages user friendly?
     #[test]
     fn test_from_cf_env_valid() {
-        env::set_var("JOB_SLEEP", "10 sec");
-        env::set_var("DRY_RUN", "true");
+        env::set_var("LS_DAEMON", "true");
+        env::set_var("LS_SLEEP", "10 sec");
+        env::set_var("LS_DRY_RUN", "true");
         env::set_var(
-            "EXCLUDE_ATTRS",
+            "LS_EXCLUDE_ATTRS",
             "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$",
         );
         env::set_var(
@@ -210,24 +294,22 @@ mod test {
         }"#},
         );
         env::set_var(
-            "SYNCHRONIZATIONS",
+            "LS_SYNCHRONIZATIONS",
             indoc! {r#"
             [{
                 "source":"ldap1",
                 "target":"ldap2",
-                "base_dns":["cn=users","cn=groups"],
-                "ts_store":"ldap2",
-                "ts_dn":"o=ldap1-ldap2,o=sync_timestamps"
+                "base_dns":["cn=users","cn=groups"]
             }]
         "#},
         );
 
         let app_config = AppConfig::from_cf_env().unwrap();
         debug!("app_config: {:?}", app_config);
-        assert_eq!(app_config.job_sleep, Duration::from_secs(10));
+        assert_eq!(app_config.job_sleep, Some(Duration::from_secs(10)));
         assert_eq!(app_config.dry_run, true);
         assert_eq!(
-            app_config.exclude_attrs.as_str(),
+            app_config.exclude_attrs.unwrap().as_str(),
             "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$"
         );
         assert_eq!(app_config.ldap_services.len(), 2);

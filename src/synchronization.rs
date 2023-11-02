@@ -1,5 +1,5 @@
-use chrono::{Datelike, Timelike, Utc};
-use ldap3::{Ldap, LdapError, LdapResult, Mod, Scope, SearchEntry};
+use chrono::{Utc, DateTime};
+use ldap3::{Ldap, LdapError, LdapResult, SearchEntry};
 use log::{debug, info, warn};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -52,7 +52,7 @@ pub struct Synchronization<'a> {
     /// map: name -> LdapService
     pub ldap_services: &'a HashMap<String, LdapService>,
     pub sync_config: &'a SynchronizationConfig,
-    pub exclude_attrs: &'a Regex,
+    pub exclude_attrs: &'a Option<Regex>,
     pub dry_run: bool,
 }
 
@@ -77,28 +77,18 @@ impl<'a> Synchronization<'a> {
     /// - for every DN: sync_delete() & sync_modify()
     /// - disconnects
     /// returns: number of touched (added, modified and delted) entries)
-    pub async fn synchronize(&self) -> Result<SyncStatistics, LdapError> {
+    pub async fn synchronize(&self, old_sync_datetime: Option<DateTime<Utc>>) -> Result<SyncStatistics, LdapError> {
         let source_service = self.ldap_services.get(&self.sync_config.source).unwrap();
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
-        let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
 
         let mut sync_statistics = SyncStatistics { recently_modified: 0, added: 0, attrs_modified: 0, deleted: 0 };
         let mut source_ldap = simple_connect(source_service).await?;
         let mut target_ldap = simple_connect(target_service).await?;
-        let mut ts_store_ldap = simple_connect(ts_store_service).await?;
 
-        let old_sync_timestamp = self.load_sync_timestamp(&mut ts_store_ldap).await?;
-
-        let now = Utc::now();
-        let new_sync_timestamp = format!(
-            "{}{:02}{:02}{:02}{:02}{:02}Z",
-            now.year(),
-            now.month(),
-            now.day(),
-            now.hour(),
-            now.minute(),
-            now.second()
-        );
+        let sync_ldap_timestamp = match old_sync_datetime {
+           Some(datetime) => Some(format_ldap_timestamp(&datetime)),
+           None => None,
+        };
 
         for dn in self.sync_config.base_dns.iter() {
             sync_statistics.deleted += Self::sync_delete(
@@ -116,7 +106,7 @@ impl<'a> Synchronization<'a> {
                 &source_service.base_dn,
                 &target_service.base_dn,
                 &dn,
-                &old_sync_timestamp,
+                &sync_ldap_timestamp,
                 self.exclude_attrs,
                 self.dry_run,
             )
@@ -126,14 +116,11 @@ impl<'a> Synchronization<'a> {
             sync_statistics.attrs_modified += modi_statistics.attrs_modified;
         }
 
-        if (sync_statistics.recently_modified != 0) && !self.dry_run {
-            self.save_sync_timestamp(&mut ts_store_ldap, &new_sync_timestamp)
-                .await?;
-        }
         Ok(sync_statistics)
     }
 
     /// return type Option<LdapError> would be good enough
+    /* 
     pub async fn save_sync_timestamp(
         &self,
         ldap: &mut Ldap,
@@ -154,10 +141,12 @@ impl<'a> Synchronization<'a> {
             _ => Err(LdapError::LdapResult { result: result.unwrap() }) // Ok with rc != 0 is an error too
         }
     }
+    */
 
     /// adding extensibleClass allows the addition of any attribute to an entry
     /// objectclass ( 1.3.6.1.4.1.1466.101.120.111 NAME 'extensibleObject'
     /// DESC 'RFC2252: extensible object' SUP top AUXILIARY )
+    /*
     pub async fn load_sync_timestamp(&self, ldap: &mut Ldap) -> Result<String, LdapError> {
         let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
         let ts_store_service_base_dn = &ts_store_service.base_dn;
@@ -171,16 +160,6 @@ impl<'a> Synchronization<'a> {
                 vec![SYNC_TIMESTAMP_ATTR_NAME],
             )
             .await?.success()?;
-        /*
-        let ldap_result = search_result.1;
-        debug!("load_sync_timestamp: LDAP result code: {}", ldap_result.rc);
-        if ldap_result.rc != 0 {
-            // Is result code ok?
-            return Err(LdapError::LdapResult {
-                result: ldap_result,
-            });
-        }
-        */
 
         let result_entries = search_result.0;
         // todo pruefen: sollte genau 1 sein
@@ -194,6 +173,7 @@ impl<'a> Synchronization<'a> {
         debug!("timestamp: {}", sync_timestamp_value);
         Ok(sync_timestamp_value)
     }
+    */
 
     /// Löscht alle Einträge, die im Ziel-LDAP vorhanden sind aber nicht im Quell-LDAP.
     /// Es werden zuerst hirarchich untergeordnete Einträge gelöscht, dann übergeordnete.
@@ -277,12 +257,12 @@ impl<'a> Synchronization<'a> {
         source_base_dn: &str,
         target_base_dn: &str,
         sync_dn: &str,
-        old_modify_timestamp: &str,
-        exclude_attrs: &Regex,
+        old_modify_timestamp: &Option<String>,
+        exclude_attrs: &Option<Regex>,
         dry_run: bool,
     ) -> Result<ModiStatistics, LdapError> {
         debug!(
-            r#"sync_modify: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}", old_modify_timestamp: "{}")"#,
+            r#"sync_modify: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}", old_modify_timestamp: {:?})"#,
             source_base_dn, target_base_dn, sync_dn, old_modify_timestamp
         );
         // im Quell-LDAP alle neulich geänderten Einträge suchen
@@ -323,7 +303,6 @@ impl<'a> Synchronization<'a> {
                 ModiOne::AttrsModified => modi_statistics.attrs_modified += 1,
             }
         }
-        // todo korrekte Anzahl zurückgeben
         Ok(modi_statistics)
     }
 
@@ -334,7 +313,7 @@ impl<'a> Synchronization<'a> {
         source_base_dn_len: usize,
         target_base_dn: &str,
         source_search_entry: SearchEntry,
-        exclude_attrs: &Regex,
+        exclude_attrs: &Option<Regex>,
         dry_run: bool,
     ) -> Result<ModiOne, LdapError> {
         // todo dont log userPassword!
@@ -347,10 +326,16 @@ impl<'a> Synchronization<'a> {
         let mut trunc_dn = source_search_entry.dn.clone();
         truncate_dn(&mut trunc_dn, source_base_dn_len);
         let target_dn = join_2_dns(&trunc_dn, target_base_dn);
-        let target_search_result =
-            search_one_entry_by_dn_attrs_filtered(target_ldap, &target_dn, exclude_attrs).await;
+        
+        let target_search_result = 
+            search_one_entry_by_dn(target_ldap, &target_dn).await;
+
         match target_search_result {
-            Ok(entry) => {
+            Ok(mut entry) => {
+                match exclude_attrs {
+                    Some(ex) => entry.attrs = filter_attrs(&entry.attrs, &ex),
+                    None => {},
+                };
                 debug!(r#"sync_modify_one_entry: target entry exists: {})"#, debug_search_entry(&entry));
                 if entry.bin_attrs.len() != 0 {
                     warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry"#);
@@ -403,6 +388,7 @@ mod test {
     use crate::ldif::parse_ldif_as_search_entries;
     use crate::synchronization_config::SynchronizationConfig;
     use indoc::*;
+    use chrono::{TimeZone, Utc};
   
 
     #[tokio::test]
@@ -529,7 +515,7 @@ mod test {
             base_dn: target_base_dn.clone(),
         };
 
-        let old_modify_timestamp = "19751129000000Z";
+        let old_modify_timestamp = "19751129000000Z".to_string();
 
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
@@ -540,8 +526,8 @@ mod test {
             &source_base_dn,
             &target_base_dn,
             "ou=Users",
-            old_modify_timestamp,
-            &Regex::new("^givenname$").unwrap(),
+            &Some(old_modify_timestamp),
+            &Some(Regex::new("^givenname$").unwrap()),
             true,
         )
         .await.unwrap();
@@ -838,6 +824,7 @@ mod test {
 
     }    
 
+    /*
     #[tokio::test]
     async fn test_load_sync_timestamp() {
         let _ = env_logger::try_init();
@@ -898,10 +885,7 @@ mod test {
         let sync_config = SynchronizationConfig {
             source: "provider".to_string(),
             target: "consumer".to_string(),
-            base_dns: vec!["cn=unused".to_string()],
-            ts_store: ts_store_name.clone(),
-            /// ts_base_dn is relative to the base_dn of the LdapService
-            ts_dn: "o=provider-consumer,o=sync_timestamps".to_string(),
+            base_dns: vec!["cn=unused".to_string()]
         };
 
         let synchronisation = Synchronization {
@@ -923,7 +907,9 @@ mod test {
 
         assert_eq!(result, "20231025235959Z");
     }
+    */
 
+    /*
     #[tokio::test]
     async fn test_save_sync_timestamp() {
         let _ = env_logger::try_init();
@@ -1008,6 +994,7 @@ mod test {
         debug!("result: {:?}", result);
         assert!(result.is_ok());
     }
+    */
 
     #[tokio::test]
     async fn test_synchronisation() {
@@ -1086,12 +1073,6 @@ mod test {
             cn: admin
             sn: Admin
             userPassword: secret
-
-            dn: o=sync_timestamps,dc=test
-            objectClass: organization
-            objectClass: extensibleObject
-            o: sync_timestamps
-            name: 19801129000000Z
     
             # to be modified
             dn: ou=Users,dc=test
@@ -1141,14 +1122,6 @@ mod test {
             sn: Admin
             userPassword: secret
 
-            # not synchronized
-            dn: o=sync_timestamps,dc=test
-            objectClass: organization
-            objectClass: extensibleObject
-            o: sync_timestamps
-            # attribute updated
-            name: 19751129000000Z
-
             # modified
             dn: ou=Users,dc=test
             objectClass: top
@@ -1182,7 +1155,6 @@ mod test {
             # no givenName
             userPassword: hallowelt123!"
         }).unwrap();
-
         let _source_server = start_test_server(
             source_plain_port,
             &source_base_dn,
@@ -1195,57 +1167,44 @@ mod test {
             target_content,
         )
         .await;
-
-        //let src_base_dn = "dc=test".to_string();
-        //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
         let source_service = LdapService {
             url: source_url,
             bind_dn: source_bind_dn,
             password: source_password,
             base_dn: source_base_dn.clone(),
         };
-
         let target_service = LdapService {
             url: target_url,
             bind_dn: target_bind_dn,
             password: target_password,
             base_dn: target_base_dn.clone(),
         };
-
         let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service.clone())]);
         let sync_config = SynchronizationConfig {
             source: "ldap1".to_string(),
             target: "ldap2".to_string(),
             base_dns: vec!["ou=Users".to_string()],
-            ts_store: "ldap2".to_string(),
-            /// ts_dn is relative to the base_dn of the LdapService
-            ts_dn: "o=sync_timestamps".to_string(),
         };
-
         let synchronization = Synchronization {
             ldap_services: &ldap_services,
             sync_config: &sync_config,
-            exclude_attrs: &Regex::new("^givenname$").unwrap(),
+            exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
             dry_run: false,
         };
+        let date_time = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
 
-        let result = synchronization.synchronize().await.unwrap();
+        
+        let result = synchronization.synchronize(Some(date_time)).await.unwrap();
+
+
         info!("result: {:?}", result);
-        assert_eq!(result.recently_modified, 4);
+        assert_eq!(result.recently_modified, 4); // of 5. one entry is very old
         assert_eq!(result.added, 2);
         assert_eq!(result.attrs_modified, 2);
         assert_eq!(result.deleted, 2);
 
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
         let mut after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
-
-        let expected_timestamp_pos = expected.iter().position(|entry| entry.dn == "o=sync_timestamps,dc=test").unwrap();
-        let after_timestamp_pos = after.iter().position(|entry| entry.dn == "o=sync_timestamps,dc=test").unwrap();
-        // timestamp geändert?
-        assert!(after[after_timestamp_pos].attrs.get("name").unwrap()[0] > expected[expected_timestamp_pos].attrs.get("name").unwrap()[0]);
-        // nicht vergleichen. gleichsetzen
-        after[after_timestamp_pos].attrs.remove("name");
-        expected[expected_timestamp_pos].attrs.remove("name");
 
         assert_vec_search_entries_eq(&after, &expected);
 

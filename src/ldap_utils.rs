@@ -1,22 +1,29 @@
 use crate::cf_services::LdapService;
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 pub fn debug_mods(mods: &Vec<Mod<String>>) -> String {
     let mut v = Vec::new();
     for modi in mods {
-      v.push(
-        match modi {
-          Mod::Add(name, values) => { format!("add: {} {}", name, values.len()) },
-          Mod::Delete(name, values) => { format!("delete: {} {}", name, values.len()) },
-          Mod::Replace(name, values) => { format!("replace: {} {}", name, values.len()) },
-          Mod::Increment(name, _) => { format!("increment: {}", name) },
-        }
-      )
-    };
+        v.push(match modi {
+            Mod::Add(name, values) => {
+                format!("add: {} {}", name, values.len())
+            }
+            Mod::Delete(name, values) => {
+                format!("delete: {} {}", name, values.len())
+            }
+            Mod::Replace(name, values) => {
+                format!("replace: {} {}", name, values.len())
+            }
+            Mod::Increment(name, _) => {
+                format!("increment: {}", name)
+            }
+        })
+    }
     format!("[{}]", v.join(", "))
 }
 
@@ -37,13 +44,18 @@ pub fn debug_search_entry(search_entry: &SearchEntry) -> String {
         let values = search_entry.bin_attrs.get(&name).unwrap();
         bin_attrs_v.push(format!("{} {}", name, values.len()));
     }
-    format!("dn: {}, attrs: [{}], bin_attrs: [{}]", search_entry.dn, attrs_v.join(", "), bin_attrs_v.join(", "))
+    format!(
+        "dn: {}, attrs: [{}], bin_attrs: [{}]",
+        search_entry.dn,
+        attrs_v.join(", "),
+        bin_attrs_v.join(", ")
+    )
 }
 
 pub fn compare_by_length_desc_then_alphabethical(a: &str, b: &str) -> Ordering {
     let c = b.len().cmp(&a.len());
     match c {
-        Ordering::Equal=> a.cmp(b),
+        Ordering::Equal => a.cmp(b),
         Ordering::Less | Ordering::Greater => c,
     }
 }
@@ -51,10 +63,10 @@ pub fn compare_by_length_desc_then_alphabethical(a: &str, b: &str) -> Ordering {
 // todo Sortierung muss auch alphabetisch sein, nicht nur nach Länge
 pub fn log_debug_dns(prefix: &str, dns: &HashSet<String>) {
     let mut dns_sorted: Vec<&String> = dns.iter().collect();
-    dns_sorted.sort_by(|a ,b| compare_by_length_desc_then_alphabethical(a, b));
+    dns_sorted.sort_by(|a, b| compare_by_length_desc_then_alphabethical(a, b));
     for dn in dns_sorted {
         debug!(r#"{} "{}""#, prefix, dn);
-    };
+    }
 }
 
 /// Joins 2 distinguished names.
@@ -99,6 +111,18 @@ pub fn truncate_dn(dn: &mut String, base_dn_len: usize) {
     dn.truncate(dn.len() - base_dn_len - 1); // comma auch abschneiden
 }
 
+pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
+    format!(
+        "{}{:02}{:02}{:02}{:02}{:02}Z",
+        date_time.year(),
+        date_time.month(),
+        date_time.day(),
+        date_time.hour(),
+        date_time.minute(),
+        date_time.second()
+    )
+}
+
 // todo handle connect failed
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
@@ -139,7 +163,7 @@ pub fn result_entries_to_norm_dns(
 ) -> HashSet<String> {
     let base_dn_len = base_dn.len();
     let mut norm_dns = HashSet::new();
-    for result_entry in result_entries {        
+    for result_entry in result_entries {
         let search_entry = SearchEntry::construct(result_entry.clone());
         let mut dn = search_entry.dn;
         truncate_dn(&mut dn, base_dn_len); // in bytes (not characters)
@@ -165,13 +189,6 @@ pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<S
     //  0: Vec<ResultEntry>
     //  1: LdapResult
 
-    /*
-    let ldap_result = search_result.1;
-    if ldap_result.rc != 0 { // Is result code ok?
-        return Err(LdapError::LdapResult{ result: ldap_result })
-    }
-    */
-
     let result_entries = search_result.0;
     info!(
         "search_norm_dns: found number of entries: {}",
@@ -183,12 +200,9 @@ pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<S
 
 /// returns exactly one entry if found or an LdapError
 /// Err(LdapResult { result: LdapResult { rc: 32, matched: "ou=Users,dc=test", text: "", refs: [], ctrls: [] } })
-pub async fn search_one_entry_by_dn(
-    ldap_conn: &mut Ldap,
-    dn: &str,
-) -> Result<SearchEntry, LdapError> {
+pub async fn search_one_entry_by_dn(ldap: &mut Ldap, dn: &str) -> Result<SearchEntry, LdapError> {
     debug!(r#"search_one_entry_by_dn: "{}""#, dn);
-    let search_result = ldap_conn
+    let search_result = ldap
         .search(dn, Scope::Base, "(objectClass=*)", vec!["*"])
         .await?
         .success()?;
@@ -198,68 +212,49 @@ pub async fn search_one_entry_by_dn(
         result_entries.len()
     ); // should be 0 or 1
 
-    /*
-    match result_entries.len() {
-        0 => Ok(None),
-        1 => {
-            let search_entry = SearchEntry::construct(result_entries[0].clone());
-            Ok(Some(search_entry))
-        }
-        _ => {
-            panic!("search_one_entry_by_dn: Found more than 1 entry.")
-        }
-    }
-    */
-
     if result_entries.len() > 1 {
         panic!("search_one_entry_by_dn: Found more than 1 entry.")
     }
 
-    let search_entry = SearchEntry::construct(result_entries[0].clone());
+    let mut search_entry = SearchEntry::construct(result_entries[0].clone());
+    search_entry.attrs = attr_names_to_lowercase(&search_entry.attrs);
     Ok(search_entry)
 }
 
 /// converts all attribute names to lower case
-/// and filters the attributes by name
+pub fn attr_names_to_lowercase(
+    old_attrs: &HashMap<String, Vec<String>>,
+) -> HashMap<String, Vec<String>> {
+    old_attrs
+        .iter()
+        .map(|(name, values)| (name.to_lowercase(), values.clone()))
+        .collect()
+}
+
+/// filters the attributes by name
 pub fn filter_attrs(
     attrs: &HashMap<String, Vec<String>>,
     exclude_attrs: &Regex,
 ) -> HashMap<String, Vec<String>> {
     attrs
         .iter()
-        .map(|(key, value)| (key.to_lowercase(), value.clone()))
         .filter(|(key, _)| !exclude_attrs.is_match(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
-
-/*
-neuer Vec, da keys sich ändern
-aber die values könnten den Eigentümer wechseln. entnehmen?
-pub fn filter_attrs_inplace() {
-    let filtered_attrs = entry.attrs
-        .into_iter()
-        .map(|(key, value)| {
-            (key.to_lowercase(), value)
-        })
-        .filter(|(key, _)| {
-            !exclude_attrs.is_match(key)
-        })
-        .collect();
-    entry.attrs = filtered_attrs;
-}
-*/
 
 /// The attributes list could be very long.
 /// So it's more convinient to search for all non-operative attributes '*' and remove unwanted attributes.
 /// Additionally attribute names are normalized to lower case,
 /// because Oracle Interne Directory returns attribute names in lower case
 /// and OpenLdap may return attributes in camel case.
+/*
 pub async fn search_one_entry_by_dn_attrs_filtered(
-    ldap_conn: &mut Ldap,
+    ldap: &mut Ldap,
     dn: &str,
     exclude_attrs: &Regex,
 ) -> Result<SearchEntry, LdapError> {
-    let result = search_one_entry_by_dn(ldap_conn, dn).await;
+    let result = search_one_entry_by_dn(ldap, dn).await;
     match result {
         Ok(mut entry) => {
             entry.attrs = filter_attrs(&entry.attrs, exclude_attrs);
@@ -272,6 +267,7 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
         Err(err) => Err(err),
     }
 }
+*/
 
 /// Searches a subtree for recently modified entries.
 /// Attribute names are normalized to lowercase
@@ -280,10 +276,13 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
 pub async fn search_modified_entries_attrs_filtered(
     ldap: &mut Ldap,
     base_dn: &str,
-    old_modify_timestamp: &str,
-    exclude_attrs: &Regex,
+    old_modify_timestamp: &Option<String>,
+    exclude_attrs: &Option<Regex>,
 ) -> Result<Vec<SearchEntry>, LdapError> {
-    let filter = format!("(modifyTimestamp>={})", old_modify_timestamp);
+    let filter = match old_modify_timestamp {
+        Some(timestamp) => format!("(modifyTimestamp>={})", timestamp),
+        None => "(objectClass=*)".to_string(),
+    };
     debug!(
         r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}""#,
         base_dn, filter
@@ -298,7 +297,11 @@ pub async fn search_modified_entries_attrs_filtered(
         match result_entry {
             Some(entry) => {
                 let mut search_entry = SearchEntry::construct(entry.clone());
-                search_entry.attrs = filter_attrs(&mut search_entry.attrs, exclude_attrs);
+                search_entry.attrs = attr_names_to_lowercase(&search_entry.attrs);
+                match exclude_attrs {
+                    Some(ex) => search_entry.attrs = filter_attrs(&search_entry.attrs, ex),
+                    None => {}
+                }
                 search_entries.push(search_entry);
             }
             None => {
@@ -357,9 +360,9 @@ pub mod test {
     use indoc::*;
     use ldap3::{LdapError, LdapResult};
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
+    use log::debug;
     use rstest::rstest;
     use std::sync::Mutex;
-    use log::debug;
 
     // singleton pattern
     static PORT_SEQUENCE: Mutex<u16> = Mutex::new(1389);
@@ -369,10 +372,10 @@ pub mod test {
     /// This function returns the next TCP port,
     /// incrmeneting by 2, so we get 2 ports one for plain LDAP and one for TLS.
     pub fn next_port() -> u16 {
-         let mut port_guard = PORT_SEQUENCE.lock().unwrap();
-         let result = *port_guard;
-         *port_guard += 2; 
-         result
+        let mut port_guard = PORT_SEQUENCE.lock().unwrap();
+        let result = *port_guard;
+        *port_guard += 2;
+        result
     }
 
     /*
@@ -387,7 +390,11 @@ pub mod test {
     #[rstest]
     #[case("A", "B", Ordering::Less)] // 'A' kommt vor 'B'
     #[case("Hallo", "Hi", Ordering::Less)] // zuerst längere, dann kürzere
-    pub fn test_compare_by_length_desc_then_alphabethical(#[case] a: &str, #[case] b: &str, #[case] expected: Ordering) {
+    pub fn test_compare_by_length_desc_then_alphabethical(
+        #[case] a: &str,
+        #[case] b: &str,
+        #[case] expected: Ordering,
+    ) {
         assert_eq!(compare_by_length_desc_then_alphabethical(a, b), expected);
     }
 
@@ -396,17 +403,33 @@ pub mod test {
         let mods = vec![
             Mod::Delete("description".to_string(), HashSet::new()),
             Mod::Delete("sn".to_string(), HashSet::new()),
-            Mod::Add("givenname".to_string(), HashSet::from(["Heinz".to_string()])),
-            Mod::Replace("instruments".to_string(), HashSet::from(["violin".to_string(), "clarinette".to_string()]))
+            Mod::Add(
+                "givenname".to_string(),
+                HashSet::from(["Heinz".to_string()]),
+            ),
+            Mod::Replace(
+                "instruments".to_string(),
+                HashSet::from(["violin".to_string(), "clarinette".to_string()]),
+            ),
         ];
-        assert_eq!(debug_mods(&mods), "[delete: description 0, delete: sn 0, add: givenname 1, replace: instruments 2]");
+        assert_eq!(
+            debug_mods(&mods),
+            "[delete: description 0, delete: sn 0, add: givenname 1, replace: instruments 2]"
+        );
     }
 
     #[test]
     pub fn test_debug_search_entry() {
         let search_entry = SearchEntry {
             dn: "cn=us012345,cn=Users,dc=test".to_string(),
-            attrs: HashMap::from([("givenname".to_string(), vec!["Heinz".to_string()]), ("sn".to_string(), vec!["Müller".to_string()]), ("objectclass".to_string(), vec!["inetorgperson".to_string(), "top".to_string()])]),
+            attrs: HashMap::from([
+                ("givenname".to_string(), vec!["Heinz".to_string()]),
+                ("sn".to_string(), vec!["Müller".to_string()]),
+                (
+                    "objectclass".to_string(),
+                    vec!["inetorgperson".to_string(), "top".to_string()],
+                ),
+            ]),
             bin_attrs: HashMap::from([]),
         };
         assert_eq!(debug_search_entry(&search_entry), "dn: cn=us012345,cn=Users,dc=test, attrs: [givenname 1, objectclass 2, sn 1], bin_attrs: []");
@@ -522,16 +545,6 @@ pub mod test {
         server
     }
 
-    pub fn attr_names_to_lowercase(
-        old_attrs: HashMap<String, Vec<String>>,
-    ) -> HashMap<String, Vec<String>> {
-        let new_attrs = old_attrs
-            .iter()
-            .map(|(name, values)| (name.to_lowercase(), values.clone()))
-            .collect();
-        new_attrs
-    }
-
     pub async fn search_all(ldap: &mut Ldap, base_dn: &str) -> Result<Vec<SearchEntry>, LdapError> {
         debug!("search all");
         let search_result = ldap
@@ -543,7 +556,7 @@ pub mod test {
             .into_iter()
             .map(|result_entry| {
                 let mut search_entry = SearchEntry::construct(result_entry.clone());
-                search_entry.attrs = attr_names_to_lowercase(search_entry.attrs);
+                search_entry.attrs = attr_names_to_lowercase(&search_entry.attrs);
                 search_entry
             })
             .collect();
@@ -694,10 +707,10 @@ pub mod test {
         // OpenLDAP server returns attribute names in Camel-Case
         assert_eq!(attrs.len(), 5);
         assert_eq!(attrs.get("cn").unwrap()[0], "xy012345"); // generated from DN by OpenLDAP server
-        assert_eq!(attrs.get("objectClass").unwrap()[0], "inetOrgPerson");
+        assert_eq!(attrs.get("objectclass").unwrap()[0], "inetOrgPerson");
         assert_eq!(attrs.get("sn").unwrap()[0], "Müller");
-        assert_eq!(attrs.get("givenName").unwrap()[0], "André");
-        assert_eq!(attrs.get("userPassword").unwrap()[0], "hallowelt123!");
+        assert_eq!(attrs.get("givenname").unwrap()[0], "André");
+        assert_eq!(attrs.get("userpassword").unwrap()[0], "hallowelt123!");
     }
 
     #[tokio::test]
@@ -836,10 +849,11 @@ pub mod test {
 
         let some_ex = Regex::new("^(?i)(givenNAME|UserPassword)$").unwrap();
         let some_dn = "cn=xy012345,ou=Users,dc=test";
-        let some_result = search_one_entry_by_dn_attrs_filtered(&mut ldap_conn, some_dn, &some_ex)
+        let some_result = search_one_entry_by_dn(&mut ldap_conn, some_dn)
             .await
             .unwrap();
-        let attrs = some_result.attrs;
+        let mut attrs = some_result.attrs;
+        attrs = filter_attrs(&attrs, &some_ex);
         debug!("attrs: {:?}", attrs);
         assert_eq!(attrs.len(), 3);
         assert!(attrs.contains_key("objectclass"));
@@ -849,7 +863,7 @@ pub mod test {
         let none_ex = Regex::new("^sn$").unwrap();
         let none_dn = "cn=ab012345,ou=Users,dc=test";
         let none_result =
-            search_one_entry_by_dn_attrs_filtered(&mut ldap_conn, none_dn, &none_ex).await;
+            search_one_entry_by_dn(&mut ldap_conn, none_dn).await;
         assert!(none_result.is_err());
         // todo what kind of error????
     }
@@ -902,7 +916,7 @@ pub mod test {
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
-        let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
+        let ex = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
         let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=new012345,ou=Users,dc=test
             objectclass: inetOrgPerson
@@ -914,7 +928,7 @@ pub mod test {
         let search_entries = search_modified_entries_attrs_filtered(
             &mut ldap_conn,
             "ou=Users,dc=test",
-            "20201231235959Z",
+            &Some("20201231235959Z".to_string()),
             &ex,
         )
         .await
@@ -930,7 +944,6 @@ pub mod test {
         assert!(attrs.contains_key("givenname"));
         assert!(attrs.contains_key("userpassword"));
     }
-
 
     #[tokio::test]
     async fn test_search_modified_entries_attrs_filtered_fail() {
@@ -960,12 +973,12 @@ pub mod test {
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
-        let ex = Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap();
+        let ex = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
 
         let failed_result = search_modified_entries_attrs_filtered(
             &mut ldap_conn,
             "ou=Users,dc=test",
-            "20201231235959Z",
+            &Some("20201231235959Z".to_string()),
             &ex,
         )
         .await;
@@ -980,7 +993,6 @@ pub mod test {
                 }
             })
         ));
-
     }
 
     #[tokio::test]

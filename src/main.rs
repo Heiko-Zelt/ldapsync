@@ -1,16 +1,17 @@
 pub mod app_config;
-pub mod synchronization;
-pub mod synchronization_config;
 pub mod cf_services;
 pub mod ldap_utils;
 pub mod ldif;
 pub mod serde_search_entry;
+pub mod synchronization;
+pub mod synchronization_config;
 #[macro_use]
 pub mod ldap_result_codes;
 
 use crate::app_config::AppConfig;
 use crate::ldap_result_codes::result_text;
 use crate::synchronization::Synchronization;
+use chrono::Utc;
 use ldap3::{LdapError, LdapResult};
 use log::{error, info};
 use tokio::time::sleep;
@@ -37,11 +38,17 @@ async fn main() {
                 })
                 .collect();
 
+            // At the very first run there is no synchronisation timestamp.
+            // All entries of the subtrees are read from source directory.
+            let mut old_sync_datetime = None;
+
             // endless loop/daemon
             loop {
                 info!("Start synchronizations.");
+                let mut new_sync_datetime = Utc::now();
+
                 for synchro in synchronizations.iter() {
-                    let result = synchro.synchronize().await;
+                    let result = synchro.synchronize(old_sync_datetime).await;
                     match result {
                         Ok(stats) => info!(
                             "Synchronization was successful. Entires recently modified: {}, added: {}, attributes modified: {}, deleted: {}",
@@ -56,15 +63,28 @@ async fn main() {
                         }
                     }
                 }
-                info!("Sleep for {:?}.", app_config.job_sleep);
-                sleep(app_config.job_sleep).await;
+
+                // todo one timestamp for every sync-subtree (2-dimensional Vec)
+                if !app_config.dry_run {
+                    old_sync_datetime = Some(new_sync_datetime);
+                }
+
+                match app_config.job_sleep {
+                    Some(s) => {
+                        info!("Sleep for {:?}.", s);
+                        sleep(s).await
+                    }
+                    None => {}
+                };
+                if !app_config.daemon {
+                    break;
+                }
             }
-        }
+        },
         Err(err) => {
             error!("Configuration Error: {:?}", err);
-        }
+        },
     }
-    // todo for every synchronisation: create entry to store synchronisation timestamps
 }
 
 #[cfg(test)]
