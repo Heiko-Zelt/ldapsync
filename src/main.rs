@@ -45,15 +45,21 @@ async fn main() {
             // endless loop/daemon
             loop {
                 info!("Start synchronizations.");
-                let mut new_sync_datetime = Utc::now();
+                let new_sync_datetime = Utc::now();
 
                 for synchro in synchronizations.iter() {
                     let result = synchro.synchronize(old_sync_datetime).await;
                     match result {
-                        Ok(stats) => info!(
-                            "Synchronization was successful. Entires recently modified: {}, added: {}, attributes modified: {}, deleted: {}",
-                            stats.recently_modified, stats.added, stats.attrs_modified, stats.deleted
-                        ),
+                        Ok(stats) => {
+                            let sync_type_description = match old_sync_datetime {
+                                Some(_) => "Recently modified",
+                                None => "All"
+                            };
+                            info!(
+                                "Synchronization was successful. {} entries: {}. Entries changed: added: {}, attributes modified: {}, deleted: {}",
+                                sync_type_description, stats.recently_modified, stats.added, stats.attrs_modified, stats.deleted
+                            );
+                        }
                         Err(err) => {
                             error!("Synchronization failed. {:?}", err);
                             match err {

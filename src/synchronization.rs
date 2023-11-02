@@ -221,7 +221,7 @@ impl<'a> Synchronization<'a> {
                 // norm_dn ends with a comma if it is not empty
                 //let target_dn = format!("{}{}", norm_dn, target.base_dn);
                 let target_dn = join_3_dns(dn, sync_dn, target_base_dn);
-                info!(r#"sync_delete: deleting: "{}""#, target_dn);
+                info!(r#"sync_delete: deleting entry: "{}""#, target_dn);
                 if !dry_run {
                     target_ldap.delete(&target_dn).await?;
                 }
@@ -282,8 +282,8 @@ impl<'a> Synchronization<'a> {
         source_search_entries.sort_by(|a, b| a.dn.len().cmp(&b.dn.len()));
 
         info!(
-            "sync_modify: number of recently modified entries: {}",
-            source_search_entries.len()
+            r#"sync_modify: subtree: "{}", number of recently modified entries: {}"#,
+            source_sync_dn, source_search_entries.len()
         );
 
         let source_base_dn_len = source_base_dn.len();
@@ -316,11 +316,9 @@ impl<'a> Synchronization<'a> {
         exclude_attrs: &Option<Regex>,
         dry_run: bool,
     ) -> Result<ModiOne, LdapError> {
-        // todo dont log userPassword!
         debug!(r#"sync_modify_one_entry: source entry: {}"#, debug_search_entry(&source_search_entry));
         if source_search_entry.bin_attrs.len() != 0 {
-            // todo do not log passwords
-            warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry: {:?}"#, source_search_entry);
+            warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry."#);
         }
 
         let mut trunc_dn = source_search_entry.dn.clone();
@@ -338,14 +336,14 @@ impl<'a> Synchronization<'a> {
                 };
                 debug!(r#"sync_modify_one_entry: target entry exists: {})"#, debug_search_entry(&entry));
                 if entry.bin_attrs.len() != 0 {
-                    warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry"#);
+                    warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry."#);
                 }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
                 if mods.is_empty() {
-                    debug!(r#"sync_modify_one_entry: no differences found"#);
+                    debug!(r#"sync_modify_one_entry: dn: "{}", no differences found"#, entry.dn);
                     return Ok(ModiOne::Unchanged);
                 }
-                info!(r#"sync_modify_one_entry: modifications: {:?}"#, debug_mods(&mods));
+                info!(r#"sync_modify_one_entry: modifying entry: dn: "{}", modifications: {:?}"#, entry.dn, debug_mods(&mods));
                 // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
                 if !dry_run {
                     target_ldap.modify(&target_dn, mods).await?;
