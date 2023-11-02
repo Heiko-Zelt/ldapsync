@@ -45,7 +45,7 @@ pub fn debug_search_entry(search_entry: &SearchEntry) -> String {
         bin_attrs_v.push(format!("{} {}", name, values.len()));
     }
     format!(
-        "dn: {}, attrs: [{}], bin_attrs: [{}]",
+        r#"dn: "{}", attrs: [{}], bin_attrs: [{}]"#,
         search_entry.dn,
         attrs_v.join(", "),
         bin_attrs_v.join(", ")
@@ -60,7 +60,7 @@ pub fn compare_by_length_desc_then_alphabethical(a: &str, b: &str) -> Ordering {
     }
 }
 
-// todo Sortierung muss auch alphabetisch sein, nicht nur nach Länge
+// TODO Sortierung muss auch alphabetisch sein, nicht nur nach Länge
 pub fn log_debug_dns(prefix: &str, dns: &HashSet<String>) {
     let mut dns_sorted: Vec<&String> = dns.iter().collect();
     dns_sorted.sort_by(|a, b| compare_by_length_desc_then_alphabethical(a, b));
@@ -123,7 +123,7 @@ pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
     )
 }
 
-// todo handle connect failed
+// TODO handle connect failed
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
     // returns type ldap3::result::Result<(LdapConnAsync, Ldap)>
@@ -174,7 +174,7 @@ pub fn result_entries_to_norm_dns(
     norm_dns
 }
 
-/// todo Error, wenn base_dn gar nicht existiert
+/// TODO Error, wenn base_dn gar nicht existiert
 pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<String>, LdapError> {
     debug!(
         r#"search_norm_dns: search for DNs from base: "{}""#,
@@ -272,7 +272,7 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
 /// Searches a subtree for recently modified entries.
 /// Attribute names are normalized to lowercase
 /// and attributes are filtered.
-/// todo Error, wenn base_dn gar nicht existiert
+/// TODO Error, wenn base_dn gar nicht existiert
 pub async fn search_modified_entries_attrs_filtered(
     ldap: &mut Ldap,
     base_dn: &str,
@@ -313,7 +313,7 @@ pub async fn search_modified_entries_attrs_filtered(
     Ok(search_entries)
 }
 
-/// todo bin_attrs berücksichtigen
+/// TODO bin_attrs berücksichtigen
 pub fn diff_attributes(
     source_attrs: &HashMap<String, Vec<String>>,
     target_attrs: &HashMap<String, Vec<String>>,
@@ -432,7 +432,7 @@ pub mod test {
             ]),
             bin_attrs: HashMap::from([]),
         };
-        assert_eq!(debug_search_entry(&search_entry), "dn: cn=us012345,cn=Users,dc=test, attrs: [givenname 1, objectclass 2, sn 1], bin_attrs: []");
+        assert_eq!(debug_search_entry(&search_entry), r#"dn: "cn=us012345,cn=Users,dc=test", attrs: [givenname 1, objectclass 2, sn 1], bin_attrs: []"#);
     }
 
     pub fn assert_attrs_eq(
@@ -453,7 +453,7 @@ pub mod test {
             panic!("dns are unequal. {} != {}", entry1.dn, entry2.dn);
         }
         assert_attrs_eq(&entry1.attrs, &entry2.attrs);
-        // todo bin_attrs
+        // TODO bin_attrs
     }
 
     pub fn assert_vec_search_entries_eq(entries1: &Vec<SearchEntry>, entries2: &Vec<SearchEntry>) {
@@ -563,12 +563,11 @@ pub mod test {
         Ok(search_entries)
     }
 
-    // todo write test for unsuccessful bind
+    // TODO write test for unsuccessful bind
     #[tokio::test]
     async fn test_simple_connect_successful() {
         let _ = env_logger::try_init();
 
-        // todo write a function/sequence which returns an unused port/port within a range
         let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
         let bind_dn = "cn=admin,dc=test".to_string();
@@ -865,7 +864,7 @@ pub mod test {
         let none_result =
             search_one_entry_by_dn(&mut ldap_conn, none_dn).await;
         assert!(none_result.is_err());
-        // todo what kind of error????
+        // TODO what kind of error????
     }
 
     #[tokio::test]
@@ -1179,7 +1178,7 @@ pub mod test {
         //debug!("target ldap conn: {:?}", target_ldap);
     }
 
-    /// todo test bin_attrs
+    /// TODO test bin_attrs
     #[test]
     fn test_diff_attributes() {
         let _ = env_logger::try_init();

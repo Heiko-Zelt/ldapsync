@@ -8,7 +8,7 @@ pub struct SynchronizationConfig {
 }
 
 impl SynchronizationConfig {
-    // todo: error if duplicate base_dns
+    // TODO: error if duplicate base_dns
     pub fn parse_synchronizations(json_str: &str) -> Result<Vec<SynchronizationConfig>,serde_json::Error> {
         serde_json::from_str(json_str)
     }
@@ -62,6 +62,6 @@ mod test {
         let result = SynchronizationConfig::parse_synchronizations(json_str);
         let err = result.expect_err("parse JSON error expected");
         debug!("{:?}", err);
-        //todo assert_eq!(err, serde_json::Error{});
+        //TODO assert_eq!(err, serde_json::Error{});
     }
 }

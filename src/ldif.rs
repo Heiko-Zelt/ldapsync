@@ -196,10 +196,10 @@ impl Iterator for LdifParser<'_> {
     /// LdifParser parses input lines like an AWK script.
     /// Currently line wraps are not supported.
     ///
-    /// todo line wraps
-    /// todo extract into an own crate
-    /// todo multiple cases of attribute names
-    /// todo first line with version number
+    /// TODO line wraps
+    /// TODO extract into an own crate
+    /// TODO multiple cases of attribute names
+    /// TODO first line with version number
     fn next(&mut self) -> Option<Self::Item> {
         let mut entry = DirectoryEntry {
             dn: "".to_string(),

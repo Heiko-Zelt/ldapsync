@@ -209,7 +209,6 @@ impl AppConfig {
 
     /// parse regular expesssions, booleans, JSON code and Duration in the configuration
     fn parse(param_map: HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
-        // todo für jeden Parameter eine eigene Funktion schreiben und unit testen
         let synchronizations_vec = Self::parse_synchronizations(&param_map.get(SYNCHRONIZATIONS))?;
         let ldap_services_map = Self::parse_vcap_services(&param_map.get(VCAP_SERVICES))?;
         let job_sleep_duration = Self::parse_sleep(&param_map.get(JOB_SLEEP))?;
@@ -344,7 +343,7 @@ mod test {
         assert!(app_config.ldap_services.contains_key("ldap1"));
         assert!(app_config.ldap_services.contains_key("ldap2"));
         assert_eq!(app_config.synchronization_configs.len(), 1);
-        //todo more asserts
+        //TODO more asserts
     }
 
     #[test]

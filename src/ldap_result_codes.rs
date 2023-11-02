@@ -57,7 +57,7 @@ macro_rules! RC_INSUFFICIENT_ACCESS_RIGHTS {
 }
 //pub(crate) use RC_INSUFFICIENT_ACCESS_RIGHTS;
 
-// todo global static hash map?
+// TODO global static hash map?
 pub fn result_text(result_code: u32) -> String {
     match result_code {
         0 => "success", // no error

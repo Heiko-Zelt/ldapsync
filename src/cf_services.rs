@@ -57,7 +57,7 @@ pub struct ServiceNameTwice;
 
 /// converts the Cloud Foundry JSON structure in a more convinient map.
 /// There must be "user-provided" services.
-/// todo Error, wenn 2 Services mit gleichem Namen existieren.
+/// TODO Error, wenn 2 Services mit gleichem Namen existieren.
 pub fn map_ldap_services(services_vec: &Vec<Service>) -> Result<HashMap<String, LdapService>, ServiceNameTwice> {
     // detect if there are duplicates
     let mut unique_names = HashSet::new();

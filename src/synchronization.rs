@@ -46,7 +46,7 @@ pub enum ModiOne {
     Unchanged,
 }
 
-// Referenced source and target LdapServices have to live as long as this struct
+/// Referenced source and target LdapServices have to live as long as this struct
 #[derive(Debug)]
 pub struct Synchronization<'a> {
     /// map: name -> LdapService
@@ -57,20 +57,6 @@ pub struct Synchronization<'a> {
 }
 
 impl<'a> Synchronization<'a> {
-    /*
-    pub fn from_synchronisation_with_names(
-        services: &'a HashMap<String, LdapService>,
-        sync_with_names: &SynchronisationConfig,
-    ) -> Synchronisation<'a> {
-        Synchronisation {
-            source_ref: services.get(&sync_with_names.source).unwrap(),
-            target_ref: services.get(&sync_with_names.target).unwrap(),
-            base_dns: sync_with_names.base_dns.clone(),
-            ts_store_ref: services.get(&sync_with_names.ts_store).unwrap(),
-            ts_base_dn: sync_with_names.ts_base_dn.clone(),
-        }
-    }
-     */
 
     /// synchonizes 2 LDAP directories.
     /// - connects to both directories
@@ -162,13 +148,13 @@ impl<'a> Synchronization<'a> {
             .await?.success()?;
 
         let result_entries = search_result.0;
-        // todo pruefen: sollte genau 1 sein
+        // TODO pruefen: sollte genau 1 sein
         debug!("load_sync_timestamp: found number of entries: {}", result_entries.len());
         let result_entry = result_entries[0].clone();
         let search_entry = SearchEntry::construct(result_entry);
         //debug!("load_sync_timestamp: entry: {:?}", search_entry);
-        // todo check if there is exact one value
-        let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap(); // todo: panic oder Fehler zurückgeben?
+        // TODO check if there is exact one value
+        let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap(); // TODO: panic oder Fehler zurückgeben?
         let sync_timestamp_value = sync_timestamp_attr[0].clone();
         debug!("timestamp: {}", sync_timestamp_value);
         Ok(sync_timestamp_value)
@@ -199,7 +185,7 @@ impl<'a> Synchronization<'a> {
         let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn).await?;
         
         debug!("sync_delete: target DNs:");
-        // todo nur ausführen, wenn log level debug
+        // TODO nur ausführen, wenn log level debug
         log_debug_dns("sync_delete:", &target_norm_dns);
 
         // Wenn es im Ziel-System keine Einträge gibt, kann auch nichts gelöscht werden.
@@ -209,7 +195,7 @@ impl<'a> Synchronization<'a> {
             let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
             let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn).await?;
             debug!("sync_delete: source DNs:");
-            // todo nur ausführen, wenn log level debug
+            // TODO nur ausführen, wenn log level debug
             log_debug_dns("sync_delete:", &source_norm_dns);
             let garbage_diff = target_norm_dns.difference(&source_norm_dns);
             let mut garbage_vec: Vec<&String> = garbage_diff.collect();
@@ -250,7 +236,7 @@ impl<'a> Synchronization<'a> {
     ///
     /// returns: Wenn erfolgreich: Anzahl der abgeglichenen Einträge (add + modify)
     ///
-    /// todo vollständig implementieren
+    /// TODO vollständig implementieren
     pub async fn sync_modify(
         source_ldap: &mut Ldap,
         target_ldap: &mut Ldap,
@@ -306,8 +292,6 @@ impl<'a> Synchronization<'a> {
         Ok(modi_statistics)
     }
 
-    /// todo implement dry_run
-    /// returns true if entry was modified or false if added
     pub async fn sync_modify_one_entry(
         target_ldap: &mut Ldap,
         source_base_dn_len: usize,
