@@ -2,7 +2,7 @@ pub mod app_config;
 pub mod cf_services;
 pub mod ldap_utils;
 pub mod ldif;
-pub mod serde_search_entry;
+//pub mod serde_search_entry;
 pub mod synchronization;
 pub mod synchronization_config;
 #[macro_use]
@@ -10,10 +10,10 @@ pub mod ldap_result_codes;
 
 use crate::app_config::AppConfig;
 use crate::ldap_result_codes::result_text;
-use crate::synchronization::{Synchronization, SyncStatistics};
-use chrono::{Utc, DateTime};
+use crate::synchronization::{SyncStatistics, Synchronization};
+use chrono::{DateTime, Utc};
 use ldap3::{LdapError, LdapResult};
-use log::{error, info, log, Level};
+use log::{error, info};
 use tokio::time::sleep;
 
 /// main function.
@@ -32,6 +32,7 @@ async fn main() {
             error!("Configuration error: {:?}", err);
         }
     }
+    info!("Program finished.")
 }
 
 /// Actual main function.
@@ -54,18 +55,36 @@ async fn lets_go(app_config: &AppConfig) {
     let mut old_sync_datetime = None;
 
     // endless loop/daemon
-    loop {
+    'daemon: loop {
         info!("Start synchronizations.");
         let new_sync_datetime = Utc::now();
 
         for synchro in synchronizations.iter() {
             let result = synchro.synchronize(old_sync_datetime).await;
             print_result_of_synchronizations(&result, old_sync_datetime);
+            // Some errors need a configuration change and restart, others may be caused by a temporary problem.
+            match result {
+                Err(
+                    LdapError::EmptyUnixPath
+                    | LdapError::PortInUnixPath
+                    | LdapError::FilterParsing
+                    | LdapError::UrlParsing { .. }
+                    | LdapError::UnknownScheme(_)
+                    | LdapError::AddNoValues
+                    | LdapError::InvalidScopeString(_)
+                    | LdapError::UnrecognizedCriticalExtension(_),
+                ) => break 'daemon,
+                Err(_) => {}
+                Ok(_) => {}
+            }
         }
 
         // TODO Prio 3: one timestamp for every sync-subtree (2-dimensional Vec)
         if !app_config.dry_run {
-            info!("replacing old timestamp {:?} with new timestamp {:?}.", old_sync_datetime, new_sync_datetime);
+            info!(
+                "replacing old timestamp {:?} with new timestamp {:?}.",
+                old_sync_datetime, new_sync_datetime
+            );
             old_sync_datetime = Some(new_sync_datetime);
         }
 
@@ -83,7 +102,10 @@ async fn lets_go(app_config: &AppConfig) {
 }
 
 /// print the result of the synchrinzations, whether it was successful or not
-fn print_result_of_synchronizations(sync_result: &Result<SyncStatistics, LdapError>, old_sync_datetime: Option<DateTime<Utc>>) {
+fn print_result_of_synchronizations(
+    sync_result: &Result<SyncStatistics, LdapError>,
+    old_sync_datetime: Option<DateTime<Utc>>,
+) {
     match sync_result {
         Ok(stats) => {
             let sync_type_description = match old_sync_datetime {

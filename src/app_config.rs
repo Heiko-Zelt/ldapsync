@@ -1,8 +1,9 @@
 use crate::cf_services::{map_ldap_services, parse_service_types, LdapService};
 use crate::synchronization_config::SynchronizationConfig;
-use log::debug;
+use log::{debug,info,warn};
 use regex::Regex;
 use std::{collections::HashMap, env, env::VarError, str::FromStr, time::Duration};
+use std::fs::read_to_string;
 
 /// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
@@ -63,6 +64,18 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    fn log_platform_info() {
+        let read_result = read_to_string("/etc/os-release");
+        match read_result {
+             Ok(content) => {
+                for line in content.lines() {
+                    info!("log_plattform_info: {}", line);
+                }
+             },
+             Err(err) => info!("Cannot read /etc/os-release. {:?}", err),
+        }
+    }
+
     /// read relevant environment variables, parse UTF8 strings and store the result in a map
     fn read_env_vars() -> Result<HashMap<&'static str, String>, AppConfigError> {
         let mut env_map = HashMap::new();
@@ -270,6 +283,7 @@ impl AppConfig {
     // difficult to unit test because the environment is a singleton
     pub fn from_cf_env() -> Result<AppConfig, AppConfigError> {
         debug!("from_cf_env()");
+        Self::log_platform_info();
         let env_map = Self::read_env_vars()?;
         Self::from_map(env_map)
     }
