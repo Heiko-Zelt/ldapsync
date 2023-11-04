@@ -31,6 +31,7 @@ pub enum LdapServiceUsage {
     Target,
 }
 
+// TODO Prio 3: write at least one test for every possible error
 #[derive(Debug)]
 pub enum AppConfigError {
     /// environment variable not set or can't be parsed as UTF8
@@ -55,6 +56,7 @@ pub enum AppConfigError {
     InvalidAttributeName {
         name: String,
     },
+    ExcludeAttrsButNoSpecialSelector,
     DuplicateAttributeName {
         name: String,
     },
@@ -295,6 +297,10 @@ impl AppConfig {
 
     /// check some conditions
     fn analyze_semantic(&self) -> Option<AppConfigError> {
+        let special_selector = self.attrs.contains("*") || self.attrs.contains("+") || self.attrs.is_empty();
+        if self.exclude_attrs.is_some() && !special_selector {
+            return Some(AppConfigError::ExcludeAttrsButNoSpecialSelector);
+        }
         if self.daemon && self.job_sleep.is_none() {
             return Some(AppConfigError::DaemonButNoSleep);
         }
@@ -346,7 +352,7 @@ mod test {
             (DAEMON, "true".to_string()),
             (JOB_SLEEP, "10 sec".to_string()),
             (DRY_RUN, "true".to_string()),
-            (ATTRS, "cn sn givenName description".to_string()),
+            (ATTRS, "".to_string()),
             (
                 EXCLUDE_ATTRS,
                 "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$".to_string(),
@@ -414,6 +420,7 @@ mod test {
             (DRY_RUN, "true".to_string()),
             (VCAP_SERVICES, "Unsinn".to_string()),
             (SYNCHRONIZATIONS, "[]".to_string()),
+            (ATTRS, "cn ou o sn givenName description".to_string()),
         ]);
 
         let result = AppConfig::from_map(&param_map);
@@ -431,6 +438,31 @@ mod test {
             }
             _ => {
                 panic!("unexpected result");
+            }
+        }
+    }
+
+    #[test]
+    fn test_from_map_exclude_attrs_without_special_selector() {
+        let param_map = HashMap::from([
+            (DAEMON, "true".to_string()),
+            (JOB_SLEEP, "10 sec".to_string()),
+            (DRY_RUN, "true".to_string()),
+            (ATTRS, "cn sn givenName".to_string()),
+            (EXCLUDE_ATTRS, "^givenname$".to_string()),
+            (VCAP_SERVICES, r#"{"user-provided":[]}"#.to_string()),
+            (SYNCHRONIZATIONS, "[]".to_string()),
+        ]);
+
+        let result = AppConfig::from_map(&param_map);
+        debug!("result: {:?}", &result);
+        match result {
+            Err(AppConfigError::ExcludeAttrsButNoSpecialSelector) => {}
+            Err(err) => {
+                panic!("unexpected err result: {:?}", err);
+            }
+            Ok(app_config) => {
+                panic!("unexpected ok result: {:?}", app_config);
             }
         }
     }
@@ -460,6 +492,7 @@ mod test {
                 .to_string(),
             ),
             (SYNCHRONIZATIONS, "[ { Unsinn } ]".to_string()),
+            (ATTRS, "*".to_string()),
         ]);
 
         let result = AppConfig::from_map(&param_map);
