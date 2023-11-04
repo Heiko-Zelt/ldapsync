@@ -1,23 +1,32 @@
 use crate::cf_services::{map_ldap_services, parse_service_types, LdapService};
 use crate::synchronization_config::SynchronizationConfig;
-use log::{debug,info,warn};
+use log::{debug, info};
+use once_cell::sync::Lazy;
 use regex::Regex;
-use std::{collections::HashMap, env, env::VarError, str::FromStr, time::Duration};
+use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
+use std::{env, env::VarError, str::FromStr, time::Duration};
 
 /// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
 pub const SYNCHRONIZATIONS: &str = "LS_SYNCHRONIZATIONS";
 pub const DAEMON: &str = "LS_DAEMON";
+pub const ATTRS: &str = "LS_ATTRS";
 pub const EXCLUDE_ATTRS: &str = "LS_EXCLUDE_ATTRS";
 pub const JOB_SLEEP: &str = "LS_SLEEP";
 pub const DRY_RUN: &str = "LS_DRY_RUN";
+
+/// regex for lowercase attribute names
+/// "+"" or "*"" or real attribute name
+/// real name starts with a letter, continues with more letters, caracters or semicolon
+
+static ATTR_NAME_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"^(\+|\*|[a-z][0-9a-z;]*)$"#).unwrap());
 
 #[derive(Debug)]
 pub enum LdapServiceUsage {
     Source,
     Target,
-    TsStore,
 }
 
 #[derive(Debug)]
@@ -28,7 +37,9 @@ pub enum AppConfigError {
         cause: VarError,
     },
     /// some error in the syntax of the environment variable
-    EnvVarParseError { env_var_name: String },
+    EnvVarParseError {
+        env_var_name: String,
+    },
     /// environment variable contains an invalid regular expression
     EnvVarParseRegexError {
         env_var_name: String,
@@ -38,6 +49,12 @@ pub enum AppConfigError {
     EnvVarParseJsonError {
         env_var_name: String,
         cause: serde_json::Error,
+    },
+    InvalidAttributeName {
+        name: String,
+    },
+    DuplicateAttributeName {
+        name: String,
     },
     /// referenced service is not defined
     LdapServiceMissing {
@@ -58,31 +75,33 @@ pub struct AppConfig {
     pub daemon: bool,
     pub job_sleep: Option<Duration>,
     pub dry_run: bool,
+    pub attrs: HashSet<String>,
     pub exclude_attrs: Option<Regex>,
     pub ldap_services: HashMap<String, LdapService>,
     pub synchronization_configs: Vec<SynchronizationConfig>,
 }
 
 impl AppConfig {
-    fn log_platform_info() {
+    pub fn log_platform_info() {
         let read_result = read_to_string("/etc/os-release");
         match read_result {
-             Ok(content) => {
+            Ok(content) => {
                 for line in content.lines() {
                     info!("log_plattform_info: {}", line);
                 }
-             },
-             Err(err) => info!("Cannot read /etc/os-release. {:?}", err),
+            }
+            Err(err) => info!("Cannot read /etc/os-release. {:?}", err),
         }
     }
 
     /// read relevant environment variables, parse UTF8 strings and store the result in a map
-    fn read_env_vars() -> Result<HashMap<&'static str, String>, AppConfigError> {
+    pub fn read_env_vars() -> Result<HashMap<&'static str, String>, AppConfigError> {
         let mut env_map = HashMap::new();
         let allowed_var_names = [
             VCAP_SERVICES,
             SYNCHRONIZATIONS,
             DAEMON,
+            ATTRS,
             EXCLUDE_ATTRS,
             JOB_SLEEP,
             DRY_RUN,
@@ -180,12 +199,10 @@ impl AppConfig {
             Some(b) => bool::from_str(b.trim()).map_err(|_| AppConfigError::EnvVarParseError {
                 env_var_name: DAEMON.to_string(),
             }),
-            None => {
-                return Err(AppConfigError::EnvVarError {
-                    env_var_name: DAEMON.to_string(),
-                    cause: VarError::NotPresent,
-                })
-            }
+            None => Err(AppConfigError::EnvVarError {
+                env_var_name: DAEMON.to_string(),
+                cause: VarError::NotPresent,
+            }),
         }
     }
 
@@ -194,15 +211,51 @@ impl AppConfig {
             Some(b) => bool::from_str(b.trim()).map_err(|_| AppConfigError::EnvVarParseError {
                 env_var_name: DRY_RUN.to_string(),
             }),
-            None => {
-                return Err(AppConfigError::EnvVarError {
-                    env_var_name: DRY_RUN.to_string(),
-                    cause: VarError::NotPresent,
-                })
-            }
+            None => Err(AppConfigError::EnvVarError {
+                env_var_name: DRY_RUN.to_string(),
+                cause: VarError::NotPresent,
+            }),
         }
     }
 
+    /// LS_ATTRS is a required parameter, without default value to make it clear, what is searched for.
+    /// Parses a comma-separarated liste of attribute names.
+    /// Attribute names are "*", "+" or a real attribute name, containing lower- and uppercase letters, digits and semicolons.
+    /// Whitespaces arround attribute names are stripped.
+    /// "dn" is not allowed, because it is the distinguished name and not an attribute name.
+    /// An empty list means no attributes are synchronized, only DNs. The target server may extract the fist part of the DN.
+    /// If an attribute name appears more than once it's deduplicated.
+    /// Example: "cn, sn, givenName, description"
+    /// TODO Prio 1: test difference searching for "+", "*" or empty attributes list.
+    fn parse_attrs(attrs_str: &Option<&String>) -> Result<HashSet<String>, AppConfigError> {
+        match attrs_str {
+            Some(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() { // special case, empty string
+                    Ok(HashSet::new())
+                } else {
+                    let mut verified_parts: HashSet<String> = HashSet::new();
+                    for part in s.split_whitespace().map(|s| s.to_lowercase()){
+                        debug!(r#"part: "{}""#, part);
+                        if !ATTR_NAME_REGEX.is_match(&part) {
+                            debug!(r#"{} is no match"#, &part);
+                            return Err(AppConfigError::InvalidAttributeName { name: part });
+                        };
+                        if !verified_parts.insert(part.to_string()) {
+                            return Err(AppConfigError::DuplicateAttributeName { name: part });
+                        }
+                    }
+                    Ok(verified_parts)
+                }
+            }
+            None => Err(AppConfigError::EnvVarError {
+                env_var_name: ATTRS.to_string(),
+                cause: VarError::NotPresent,
+            }),
+        }
+    }
+
+    /// Parse a regular expession
     fn parse_exclude_attrs(
         exclude_attrs: &Option<&String>,
     ) -> Result<Option<Regex>, AppConfigError> {
@@ -221,17 +274,19 @@ impl AppConfig {
     }
 
     /// parse regular expesssions, booleans, JSON code and Duration in the configuration
-    fn parse(param_map: HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
+    fn parse(param_map: &HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
         let synchronizations_vec = Self::parse_synchronizations(&param_map.get(SYNCHRONIZATIONS))?;
         let ldap_services_map = Self::parse_vcap_services(&param_map.get(VCAP_SERVICES))?;
         let job_sleep_duration = Self::parse_sleep(&param_map.get(JOB_SLEEP))?;
         let daemon_bool = Self::parse_daemon(&param_map.get(DAEMON))?;
         let dry_run_bool = Self::parse_dry_run(&param_map.get(DRY_RUN))?;
+        let attrs_set = Self::parse_attrs(&param_map.get(ATTRS))?;
         let exclude_attrs_pattern = Self::parse_exclude_attrs(&param_map.get(EXCLUDE_ATTRS))?;
         let config = AppConfig {
             daemon: daemon_bool,
             job_sleep: job_sleep_duration,
             dry_run: dry_run_bool,
+            attrs: attrs_set,
             exclude_attrs: exclude_attrs_pattern,
             ldap_services: ldap_services_map,
             synchronization_configs: synchronizations_vec,
@@ -270,22 +325,13 @@ impl AppConfig {
     // Read configuration from a map instead of environment variables
     // that's very useful for unit tests, because the environment is a singleton.
     // Tests which run in parallel, can't use different environments.
-    pub fn from_map(param_map: HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
+    pub fn from_map(param_map: &HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
         let config = Self::parse(param_map)?;
         match config.analyze_semantic() {
             Some(err) => return Err(err),
             None => {}
         }
         Ok(config)
-    }
-
-    // Read configuration from environment variables, parse them and check semantic
-    // difficult to unit test because the environment is a singleton
-    pub fn from_cf_env() -> Result<AppConfig, AppConfigError> {
-        debug!("from_cf_env()");
-        Self::log_platform_info();
-        let env_map = Self::read_env_vars()?;
-        Self::from_map(env_map)
     }
 }
 
@@ -301,6 +347,7 @@ mod test {
             (DAEMON, "true".to_string()),
             (JOB_SLEEP, "10 sec".to_string()),
             (DRY_RUN, "true".to_string()),
+            (ATTRS, "cn sn givenName description".to_string()),
             (
                 EXCLUDE_ATTRS,
                 "^(?i)(authPassword|orclPassword|orclAci|orclEntryLevelAci)$".to_string(),
@@ -345,7 +392,7 @@ mod test {
             ),
         ]);
 
-        let app_config = AppConfig::from_map(param_map).unwrap();
+        let app_config = AppConfig::from_map(&param_map).unwrap();
         debug!("app_config: {:?}", app_config);
         assert_eq!(app_config.job_sleep, Some(Duration::from_secs(10)));
         assert_eq!(app_config.dry_run, true);
@@ -370,7 +417,7 @@ mod test {
             (SYNCHRONIZATIONS, "[]".to_string()),
         ]);
 
-        let result = AppConfig::from_map(param_map);
+        let result = AppConfig::from_map(&param_map);
         debug!("result: {:?}", result);
         match result {
             Err(AppConfigError::EnvVarParseJsonError {
@@ -416,7 +463,7 @@ mod test {
             (SYNCHRONIZATIONS, "[ { Unsinn } ]".to_string()),
         ]);
 
-        let result = AppConfig::from_map(param_map);
+        let result = AppConfig::from_map(&param_map);
         debug!("result: {:?}", result);
         match result {
             Err(AppConfigError::EnvVarParseJsonError {
@@ -596,6 +643,44 @@ mod test {
         let given = live_longer.as_ref();
         let result = AppConfig::parse_daemon(&given);
         // Trick mit format!(), weil PartialEq nicht für alle Teile implementiert ist
+        assert_eq!(format!("{:?}", result), expected);
+    }
+
+    #[rstest]
+    #[case(Some("cn sn givenName  description"), vec!["cn", "sn", "givenname", "description"])]
+    #[case(Some("l"), vec!["l"])] // lower case L
+    #[case(Some(""), vec![])]
+    #[case(Some("orclPassword;xyz"), vec!["orclpassword;xyz"])]
+    #[case(Some("+"), vec!["+"])]
+    #[case(Some("*"), vec!["*"])]
+    #[case(Some("+ *"), vec!["+", "*"])]
+    fn test_parse_attrs_ok(#[case] s: Option<&str>, #[case] expected: Vec<&str>) {
+        let live_longer = match s {
+            Some(h) => Some(String::from(h)),
+            None => None,
+        };
+        let given = live_longer.as_ref();
+        let expected_set: HashSet<String> = expected.iter().map(|s| s.to_string()).collect();
+
+        let result_set = AppConfig::parse_attrs(&given).unwrap();
+
+        assert_eq!(result_set, expected_set);
+    }
+
+    #[rstest]
+    #[case(None, r#"Err(EnvVarError { env_var_name: "LS_ATTRS", cause: NotPresent })"#)]
+    #[case(Some("%"), r#"Err(InvalidAttributeName { name: "%" })"#)]
+    #[case(Some("%cn"), r#"Err(InvalidAttributeName { name: "%cn" })"#)]
+    #[case(Some("0cn"), r#"Err(InvalidAttributeName { name: "0cn" })"#)]
+    #[case(Some("cn CN givenName givenname"), r#"Err(DuplicateAttributeName { name: "cn" })"#)]
+    fn test_parse_attrs_err(#[case] s: Option<&str>, #[case] expected: &str) {
+        let live_longer = match s {
+            Some(h) => Some(String::from(h)),
+            None => None,
+        };
+        let given = live_longer.as_ref();
+        let result = AppConfig::parse_attrs(&given);
+
         assert_eq!(format!("{:?}", result), expected);
     }
 

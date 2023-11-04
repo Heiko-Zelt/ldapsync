@@ -572,6 +572,7 @@ dependencies = [
  "ldap-test-server",
  "ldap3",
  "log",
+ "once_cell",
  "regex",
  "rstest",
  "serde",

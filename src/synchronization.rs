@@ -1089,7 +1089,7 @@ mod test {
             userPassword: hallowelt123!"
         };
 
-        let mut expected = parse_ldif_as_search_entries(indoc! { "
+        let expected = parse_ldif_as_search_entries(indoc! { "
             # not synchronized
             dn: dc=test
             objectclass: dcObject
@@ -1186,7 +1186,7 @@ mod test {
         assert_eq!(result.deleted, 2);
 
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
-        let mut after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
+        let after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
 
         assert_vec_search_entries_eq(&after, &expected);
 

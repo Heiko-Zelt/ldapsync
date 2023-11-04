@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use ldap3::{LdapError, LdapResult};
 use log::{error, info};
 use tokio::time::sleep;
+use std::collections::HashMap;
 
 /// main function.
 /// reads configuration from environment variables.
@@ -23,8 +24,23 @@ use tokio::time::sleep;
 async fn main() {
     env_logger::init();
     info!("{}", "ldapsync main()");
-    let app_config = AppConfig::from_cf_env();
-    match app_config {
+    AppConfig::log_platform_info();
+    let read_result = AppConfig::read_env_vars();
+    match read_result {
+        Ok(params_map) => {
+            params_read(&params_map).await;
+        }
+        Err(err) => {
+            error!("Error reading environment variables: {:?}", err);
+        }
+    }
+    info!("Program finished.")
+}
+
+/// after environment variables have been read
+async fn params_read(params_map: &HashMap<&str, String>) {
+    let config_result = AppConfig::from_map(params_map);
+    match config_result {
         Ok(app_config) => {
             lets_go(&app_config).await;
         }
@@ -32,10 +48,10 @@ async fn main() {
             error!("Configuration error: {:?}", err);
         }
     }
-    info!("Program finished.")
 }
 
-/// Actual main function.
+
+/// Actual main function, after configuration has been read and verified.
 /// Initializes 2 more variables and
 /// in an endless loop call synchronize() for every synchronization.
 async fn lets_go(app_config: &AppConfig) {
@@ -74,8 +90,7 @@ async fn lets_go(app_config: &AppConfig) {
                     | LdapError::InvalidScopeString(_)
                     | LdapError::UnrecognizedCriticalExtension(_),
                 ) => break 'daemon,
-                Err(_) => {}
-                Ok(_) => {}
+                Err(_) |Ok(_) => {},
             }
         }
 

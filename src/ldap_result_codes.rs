@@ -1,4 +1,5 @@
-// i need a macro to write these macros
+// TODO Prio 3: I need a macro to write these macros
+// TODO Prio 3: complete list of macros, one macro for every resturn code
 
 #[allow(unused_macros)]
 macro_rules! RC_SUCCESS {
@@ -6,7 +7,8 @@ macro_rules! RC_SUCCESS {
         0
     };
 }
-//pub(crate) use RC_SUCCESS;
+#[allow(unused_imports)]
+pub(crate) use RC_SUCCESS;
 
 #[allow(unused_macros)]
 macro_rules! RC_OPERATIONS_ERROR {
@@ -14,7 +16,8 @@ macro_rules! RC_OPERATIONS_ERROR {
         1
     };
 }
-//pub(crate) use RC_OPERATIONS_ERROR;
+#[allow(unused_imports)]
+pub(crate) use RC_OPERATIONS_ERROR;
 
 #[allow(unused_macros)]
 macro_rules! RC_PROTOCOL_ERROR {
@@ -22,7 +25,8 @@ macro_rules! RC_PROTOCOL_ERROR {
         2
     };
 }
-//pub(crate) use RC_PROTOCOL_ERROR;
+#[allow(unused_imports)]
+pub(crate) use RC_PROTOCOL_ERROR;
 
 #[allow(unused_macros)]
 macro_rules! RC_TIME_LIMIT_EXCEEDED {
@@ -30,7 +34,8 @@ macro_rules! RC_TIME_LIMIT_EXCEEDED {
         3
     };
 }
-//pub(crate) use RC_TIME_LIMIT_EXCEEDED;
+#[allow(unused_imports)]
+pub(crate) use RC_TIME_LIMIT_EXCEEDED;
 
 
 #[allow(unused_macros)]
@@ -47,6 +52,7 @@ macro_rules! RC_INVALID_CREDENTIALS {
         49
     };
 }
+#[allow(unused_imports)]
 pub(crate) use RC_INVALID_CREDENTIALS;
 
 #[allow(unused_macros)]
@@ -55,7 +61,8 @@ macro_rules! RC_INSUFFICIENT_ACCESS_RIGHTS {
         50
     };
 }
-//pub(crate) use RC_INSUFFICIENT_ACCESS_RIGHTS;
+#[allow(unused_imports)]
+pub(crate) use RC_INSUFFICIENT_ACCESS_RIGHTS;
 
 // TODO global static hash map?
 pub fn result_text(result_code: u32) -> String {

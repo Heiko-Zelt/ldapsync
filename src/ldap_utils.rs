@@ -859,7 +859,6 @@ pub mod test {
         assert!(attrs.contains_key("cn"));
         assert!(attrs.contains_key("sn"));
 
-        let none_ex = Regex::new("^sn$").unwrap();
         let none_dn = "cn=ab012345,ou=Users,dc=test";
         let none_result =
             search_one_entry_by_dn(&mut ldap_conn, none_dn).await;
