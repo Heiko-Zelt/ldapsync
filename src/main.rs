@@ -55,6 +55,7 @@ async fn params_read(params_map: &HashMap<&str, String>) {
 /// Initializes 2 more variables and
 /// in an endless loop call synchronize() for every synchronization.
 async fn lets_go(app_config: &AppConfig) {
+    let attrs_vec = Vec::from_iter(app_config.attrs.iter().cloned());
     let synchronizations: Vec<Synchronization> = app_config
         .synchronization_configs
         .iter()
@@ -62,6 +63,7 @@ async fn lets_go(app_config: &AppConfig) {
             ldap_services: &app_config.ldap_services,
             sync_config: sync_config,
             dry_run: app_config.dry_run,
+            attrs: &attrs_vec,
             exclude_attrs: &app_config.exclude_attrs,
         })
         .collect();

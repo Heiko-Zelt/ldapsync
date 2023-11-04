@@ -277,6 +277,7 @@ pub async fn search_modified_entries_attrs_filtered(
     ldap: &mut Ldap,
     base_dn: &str,
     old_modify_timestamp: &Option<String>,
+    attrs: &Vec<String>,
     exclude_attrs: &Option<Regex>,
 ) -> Result<Vec<SearchEntry>, LdapError> {
     let filter = match old_modify_timestamp {
@@ -288,7 +289,7 @@ pub async fn search_modified_entries_attrs_filtered(
         base_dn, filter
     );
     let mut search_stream = ldap
-        .streaming_search(&base_dn, Scope::Subtree, &filter, vec!["*"])
+        .streaming_search(&base_dn, Scope::Subtree, &filter, attrs)
         .await?;
     let mut search_entries: Vec<SearchEntry> = Vec::new();
     loop {
@@ -914,7 +915,8 @@ pub mod test {
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
-        let ex = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
+        let attrs = vec!["*".to_string()];
+        let ex_attrs = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
         let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=new012345,ou=Users,dc=test
             objectclass: inetOrgPerson
@@ -927,7 +929,8 @@ pub mod test {
             &mut ldap_conn,
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
-            &ex,
+            &attrs,
+            &ex_attrs,
         )
         .await
         .unwrap();
@@ -971,13 +974,15 @@ pub mod test {
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
-        let ex = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
+        let attrs = vec!["*".to_string()];
+        let ex_attrs = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
 
         let failed_result = search_modified_entries_attrs_filtered(
             &mut ldap_conn,
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
-            &ex,
+            &attrs,
+            &ex_attrs,
         )
         .await;
 

@@ -52,6 +52,7 @@ pub struct Synchronization<'a> {
     /// map: name -> LdapService
     pub ldap_services: &'a HashMap<String, LdapService>,
     pub sync_config: &'a SynchronizationConfig,
+    pub attrs: &'a Vec<String>,
     pub exclude_attrs: &'a Option<Regex>,
     pub dry_run: bool,
 }
@@ -93,6 +94,7 @@ impl<'a> Synchronization<'a> {
                 &target_service.base_dn,
                 &dn,
                 &sync_ldap_timestamp,
+                self.attrs,
                 self.exclude_attrs,
                 self.dry_run,
             )
@@ -244,6 +246,7 @@ impl<'a> Synchronization<'a> {
         target_base_dn: &str,
         sync_dn: &str,
         old_modify_timestamp: &Option<String>,
+        attrs: &Vec<String>,
         exclude_attrs: &Option<Regex>,
         dry_run: bool,
     ) -> Result<ModiStatistics, LdapError> {
@@ -258,6 +261,7 @@ impl<'a> Synchronization<'a> {
             source_ldap,
             &source_sync_dn,
             old_modify_timestamp,
+            attrs,
             exclude_attrs,
         )
         .await?;
@@ -509,6 +513,7 @@ mod test {
             &target_base_dn,
             "ou=Users",
             &Some(old_modify_timestamp),
+            &vec!["*".to_string()],
             &Some(Regex::new("^givenname$").unwrap()),
             true,
         )
@@ -1170,6 +1175,7 @@ mod test {
         let synchronization = Synchronization {
             ldap_services: &ldap_services,
             sync_config: &sync_config,
+            attrs: &vec!["*".to_string()],
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
             dry_run: false,
         };
