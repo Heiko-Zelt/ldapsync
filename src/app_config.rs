@@ -237,9 +237,7 @@ impl AppConfig {
                 } else {
                     let mut verified_parts: HashSet<String> = HashSet::new();
                     for part in s.split_whitespace().map(|s| s.to_lowercase()){
-                        debug!(r#"part: "{}""#, part);
-                        if !ATTR_NAME_REGEX.is_match(&part) {
-                            debug!(r#"{} is no match"#, &part);
+                        if (!ATTR_NAME_REGEX.is_match(&part)) || (part == "dn") {
                             return Err(AppConfigError::InvalidAttributeName { name: part });
                         };
                         if !verified_parts.insert(part.to_string()) {
@@ -650,11 +648,14 @@ mod test {
     #[rstest]
     #[case(Some("cn sn givenName  description"), vec!["cn", "sn", "givenname", "description"])]
     #[case(Some("l"), vec!["l"])] // lower case L
+    #[case(Some("\no\n"), vec!["o"])] // lower case O
     #[case(Some(""), vec![])]
+    #[case(Some("\n\t\r"), vec![])]
     #[case(Some("orclPassword;xyz"), vec!["orclpassword;xyz"])]
     #[case(Some("+"), vec!["+"])]
     #[case(Some("*"), vec!["*"])]
     #[case(Some("+ *"), vec!["+", "*"])]
+    #[case(Some("\t+\t*\t"), vec!["+", "*"])]
     fn test_parse_attrs_ok(#[case] s: Option<&str>, #[case] expected: Vec<&str>) {
         let live_longer = match s {
             Some(h) => Some(String::from(h)),
@@ -670,6 +671,9 @@ mod test {
 
     #[rstest]
     #[case(None, r#"Err(EnvVarError { env_var_name: "LS_ATTRS", cause: NotPresent })"#)]
+    #[case(Some("dn"), r#"Err(InvalidAttributeName { name: "dn" })"#)]
+    #[case(Some(" DN "), r#"Err(InvalidAttributeName { name: "dn" })"#)]
+    #[case(Some("description DN ou givenName"), r#"Err(InvalidAttributeName { name: "dn" })"#)]
     #[case(Some("%"), r#"Err(InvalidAttributeName { name: "%" })"#)]
     #[case(Some("%cn"), r#"Err(InvalidAttributeName { name: "%cn" })"#)]
     #[case(Some("0cn"), r#"Err(InvalidAttributeName { name: "0cn" })"#)]
