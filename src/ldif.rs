@@ -8,6 +8,21 @@ use std::iter::Enumerate;
 use std::str;
 use std::str::Lines;
 use std::str::Utf8Error;
+use once_cell::sync::Lazy;
+
+
+static DN_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("^dn: (.*)$").unwrap());
+static ENCODED_DN_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("^dn:: (.*)$").unwrap());
+static ATTR_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap());
+static ENCODED_ATTR_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("^([a-zA-Z0-9]+):: (.*)$").unwrap());
+static EMPTY_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("^$").unwrap());
+static COMMENT_LINE_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new("^#").unwrap());    
 
 /// If an attribute value is provided in clear text, it's definitely text.
 /// If it is provided base64-encoded and it can be parsed as UTF8, its probably text, otherwise binary.
@@ -97,25 +112,12 @@ pub struct ParseLdifError {
 /// see: RfC 2849
 pub struct LdifParser<'a> {
     ldif_lines_iter: Enumerate<Lines<'a>>,
-    dn_line_regex: Regex,
-    encoded_dn_line_regex: Regex,
-    attr_line_regex: Regex,
-    encoded_attr_line_regex: Regex,
-    empty_line_regex: Regex,
-    comment_line_regex: Regex,
 }
 
 impl LdifParser<'_> {
     pub fn from_lines(ldif_lines_iter: Lines) -> LdifParser {
         let parser = LdifParser {
             ldif_lines_iter: ldif_lines_iter.enumerate(),
-
-            dn_line_regex: Regex::new("^dn: (.*)$").unwrap(),
-            encoded_dn_line_regex: Regex::new("^dn:: (.*)$").unwrap(),
-            attr_line_regex: Regex::new("^([a-zA-Z0-9]+): (.*)$").unwrap(),
-            encoded_attr_line_regex: Regex::new("^([a-zA-Z0-9]+):: (.*)$").unwrap(),
-            empty_line_regex: Regex::new("^$").unwrap(),
-            comment_line_regex: Regex::new("^#").unwrap(),
         };
         parser
     }
@@ -213,7 +215,7 @@ impl Iterator for LdifParser<'_> {
             let ldif_line = self.ldif_lines_iter.next();
             match ldif_line {
                 Some((line_num, line)) => {
-                    let dn_line_captures = self.dn_line_regex.captures(line);
+                    let dn_line_captures = DN_LINE_REGEX.captures(line);
                     match dn_line_captures {
                         Some(caps) => {
                             if inside_entry {
@@ -231,7 +233,7 @@ impl Iterator for LdifParser<'_> {
                         None => {}
                     };
 
-                    let encoded_dn_line_captures = self.encoded_dn_line_regex.captures(line);
+                    let encoded_dn_line_captures = ENCODED_DN_LINE_REGEX.captures(line);
                     match encoded_dn_line_captures {
                         Some(caps) => {
                             if inside_entry {
@@ -267,7 +269,7 @@ impl Iterator for LdifParser<'_> {
                         None => {}
                     };
 
-                    let attr_line_captures = self.attr_line_regex.captures(line);
+                    let attr_line_captures = ATTR_LINE_REGEX.captures(line);
                     match attr_line_captures {
                         Some(caps) => {
                             if inside_entry {
@@ -290,7 +292,7 @@ impl Iterator for LdifParser<'_> {
                         None => {}
                     };
 
-                    let encoded_attr_line_captures = self.encoded_attr_line_regex.captures(line);
+                    let encoded_attr_line_captures = ENCODED_ATTR_LINE_REGEX.captures(line);
                     match encoded_attr_line_captures {
                         Some(caps) => {
                             if inside_entry {
@@ -322,7 +324,7 @@ impl Iterator for LdifParser<'_> {
                         None => {}
                     };
 
-                    let empty_line_captures = self.empty_line_regex.captures(line);
+                    let empty_line_captures = EMPTY_LINE_REGEX.captures(line);
                     match empty_line_captures {
                         Some(_) => {
                             if inside_entry {
@@ -335,7 +337,7 @@ impl Iterator for LdifParser<'_> {
                         None => {}
                     };
 
-                    let comment_line_captures = self.comment_line_regex.captures(line);
+                    let comment_line_captures = COMMENT_LINE_REGEX.captures(line);
                     match comment_line_captures {
                         Some(_) => {
                             continue;

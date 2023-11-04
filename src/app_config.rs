@@ -19,9 +19,11 @@ pub const DRY_RUN: &str = "LS_DRY_RUN";
 /// regex for lowercase attribute names
 /// "+"" or "*"" or real attribute name
 /// real name starts with a letter, continues with more letters, caracters or semicolon
-
 static ATTR_NAME_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"^(\+|\*|[a-z][0-9a-z;]*)$"#).unwrap());
+    Lazy::new(|| Regex::new(r#"^(\+|\*|[a-z][0-9a-z;]*)$"#).unwrap()); // assumption: works always or never
+
+static DURATION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new( " *([1-9][0-9]*) *(sec|min) *").unwrap());
 
 #[derive(Debug)]
 pub enum LdapServiceUsage {
@@ -126,8 +128,7 @@ impl AppConfig {
     /// example input "15 min" or "10 sec".
     /// zero (example "0 min") is not allowed.
     fn parse_duration(hay: &str) -> Option<Duration> {
-        let re = Regex::new(r" *([1-9][0-9]*) *(sec|min) *").unwrap(); // assumption: works always or never
-        let captures = re.captures(hay)?;
+        let captures = DURATION_REGEX.captures(hay)?;
         let number_str = captures.get(1).unwrap().as_str();
         let unit_str = captures.get(2).unwrap().as_str();
         let number = number_str.parse().unwrap();
