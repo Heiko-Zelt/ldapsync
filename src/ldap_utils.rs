@@ -123,33 +123,23 @@ pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
     )
 }
 
-// TODO handle connect failed
+
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
     // returns type ldap3::result::Result<(LdapConnAsync, Ldap)>
     // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<(LdapConnAsync, Ldap), LdapError>
 
     ldap3::drive!(conn);
-    let _ldap_result = ldap
-        .simple_bind(&service.bind_dn, &service.password)
-        .await?
-        .success()?;
-    // returns: ldap3::result::Result<LdapResult>
-    // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<LdapResult, LdapError>
-    // Enum ldap3::result::LdapError
-    // return code is in LdapResult
 
-    // LdapResult {result: LdapResult } is a variant of LdapError
-
-    /*
-    does the same as .success()?
-    if ldap_result.rc != 0 {
-        Err(LdapError::LdapResult { result: ldap_result })
-    } else {
-        Ok(ldap)
+    match service {
+        LdapService { bind_dn: Some(bdn), password: Some(pw), ..} => {
+            let _ldap_result = ldap
+            .simple_bind(bdn, pw)
+            .await?
+            .success()?;
+        },
+        _ => {}
     }
-    */
-
     Ok(ldap)
 }
 
@@ -174,7 +164,6 @@ pub fn result_entries_to_norm_dns(
     norm_dns
 }
 
-/// TODO Error, wenn base_dn gar nicht existiert
 pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<String>, LdapError> {
     debug!(
         r#"search_norm_dns: search for DNs from base: "{}""#,
@@ -564,7 +553,6 @@ pub mod test {
         Ok(search_entries)
     }
 
-    // TODO write test for unsuccessful bind
     #[tokio::test]
     async fn test_simple_connect_successful() {
         let _ = env_logger::try_init();
@@ -594,8 +582,48 @@ pub mod test {
 
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
+            base_dn: base_dn.clone(),
+        };
+
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+
+        //let src_base_dn = "dc=test".to_string();
+        //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
+        let _ldap_conn = simple_connect(&service).await.unwrap();
+        //debug!("ldap conn: {:?}", ldap_conn);
+    }
+
+    #[tokio::test]
+    async fn test_simple_connect_anonymous() {
+        let _ = env_logger::try_init();
+
+        let plain_port = next_port();
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users"
+        };
+
+        let service = LdapService {
+            url: url,
+            bind_dn: None,
+            password: None,
             base_dn: base_dn.clone(),
         };
 
@@ -634,8 +662,8 @@ pub mod test {
         };
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: wrong_password,
+            bind_dn: Some(bind_dn),
+            password: Some(wrong_password),
             base_dn: base_dn.clone(),
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
@@ -689,8 +717,8 @@ pub mod test {
 
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
 
@@ -712,6 +740,65 @@ pub mod test {
         assert_eq!(attrs.get("givenname").unwrap()[0], "André");
         assert_eq!(attrs.get("userpassword").unwrap()[0], "hallowelt123!");
     }
+
+    #[tokio::test]
+    async fn test_search_one_entry_by_dn_anonymous() {
+        let _ = env_logger::try_init();
+
+        let plain_port = next_port();
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+        
+            dn: cn=xy012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: hallowelt123!"
+        };
+
+        let service = LdapService {
+            url: url,
+            bind_dn: None,
+            password: None,
+            base_dn: base_dn.clone(),
+        };
+
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+
+        let some_dn = "cn=xy012345,ou=Users,dc=test";
+        let result = search_one_entry_by_dn(&mut ldap_conn, some_dn)
+            .await;
+        assert!(matches!(
+            &result,
+            Err(LdapError::LdapResult {
+                result: LdapResult {
+                    rc: RC_UNWILLING_TO_PERFORM!(),
+                    ref text,
+                    ..
+                }
+            }) if text == "authentication required"
+        ));
+
+    }
+
 
     #[tokio::test]
     async fn test_search_one_entry_by_dn_not_found() {
@@ -737,8 +824,8 @@ pub mod test {
 
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
 
@@ -787,8 +874,8 @@ pub mod test {
 
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
 
@@ -838,8 +925,8 @@ pub mod test {
 
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
 
@@ -909,8 +996,8 @@ pub mod test {
         };
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
@@ -968,8 +1055,8 @@ pub mod test {
         };
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
@@ -1032,8 +1119,8 @@ pub mod test {
         };
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
@@ -1072,8 +1159,8 @@ pub mod test {
         };
         let service = LdapService {
             url: url,
-            bind_dn: bind_dn,
-            password: password,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
             base_dn: base_dn.clone(),
         };
         let _server = start_test_server(plain_port, &base_dn, content).await;
@@ -1164,15 +1251,15 @@ pub mod test {
         //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
         let source_service = LdapService {
             url: source_url,
-            bind_dn: source_bind_dn,
-            password: source_password,
+            bind_dn: Some(source_bind_dn),
+            password: Some(source_password),
             base_dn: source_base_dn,
         };
 
         let target_service = LdapService {
             url: target_url,
-            bind_dn: target_bind_dn,
-            password: target_password,
+            bind_dn: Some(target_bind_dn),
+            password: Some(target_password),
             base_dn: target_base_dn,
         };
 

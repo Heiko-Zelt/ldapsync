@@ -6,6 +6,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Debug, PartialEq)]
+pub enum LdapServiceError {
+    PasswordButNoBindDN,
+    BindDNButNoPassword
+}
+
 /// In this application only "user-provided" services are used.
 /// No "mongodb" or whatever is allowed.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -15,12 +21,26 @@ pub struct ServiceTypes {
 }
 
 /// equals "credentials" in Cloud Foundry JSON code
+/// if bind_dn and password are not provided the ldap bind is anonymous
+/// TODO check if bind_dn and password are both Some or both None
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct LdapService {
     pub url: String,
-    pub bind_dn: String,
-    pub password: String,
+    pub bind_dn: Option<String>,
+    pub password: Option<String>,
     pub base_dn: String,
+}
+
+impl LdapService {
+    pub fn analyze_semantic(&self) -> Option<LdapServiceError> {
+        if self.bind_dn.is_some() && self.password.is_none() {
+            return Some(LdapServiceError::BindDNButNoPassword);
+        };
+        if self.password.is_some() && self.bind_dn.is_none() {
+            return Some(LdapServiceError::PasswordButNoBindDN);
+        };
+        None
+    }
 }
 
 /// to reduce the size of the required JSON code most fileds are Optional
@@ -123,8 +143,8 @@ mod test {
         assert_eq!(cf_service.name, "ldap1");
         let credentials = &cf_service.credentials;
         assert_eq!(credentials.base_dn, "dc=de");
-        assert_eq!(credentials.bind_dn, "cn=admin1,dc=de");
-        assert_eq!(credentials.password, "secret1");
+        assert_eq!(credentials.bind_dn, Some("cn=admin1,dc=de".to_string()));
+        assert_eq!(credentials.password, Some("secret1".to_string()));
         assert_eq!(credentials.url, "ldap://ldap1.provider.de:389");
 
     }
@@ -154,17 +174,46 @@ mod test {
         assert_eq!(cf_service.name, "ldap1");
         let credentials = &cf_service.credentials;
         assert_eq!(credentials.base_dn, "dc=de");
-        assert_eq!(credentials.bind_dn, "cn=admin1,dc=de");
-        assert_eq!(credentials.password, "secret1");
+        assert_eq!(credentials.bind_dn, Some("cn=admin1,dc=de".to_string()));
+        assert_eq!(credentials.password, Some("secret1".to_string()));
         assert_eq!(credentials.url, "ldap://ldap1.provider.de:389");
     }
+
+    #[test]
+    fn test_parse_service_types_anonymous() {
+        let minimal_services_json = indoc! {r#"
+        {
+            "user-provided": [
+                {
+                    "name": "ldap1",
+                    "credentials": {
+                        "base_dn": "dc=de",
+                        "url": "ldap://ldap1.provider.de:389"
+                    }
+                }
+            ]
+        }"#};
+
+        let result = parse_service_types(minimal_services_json).unwrap();
+
+        let user_provided_services = result.user_provided;
+        assert_eq!(user_provided_services.len(), 1);
+        let cf_service = &user_provided_services[0];
+        assert_eq!(cf_service.name, "ldap1");
+        let credentials = &cf_service.credentials;
+        assert_eq!(credentials.base_dn, "dc=de");
+        assert_eq!(credentials.bind_dn, None);
+        assert_eq!(credentials.password, None);
+        assert_eq!(credentials.url, "ldap://ldap1.provider.de:389");
+    }
+
 
     #[test]
     fn test_map_ldap_services() {
         let credentials = LdapService {
             url: "ldap://ldap1.provider.de:389".to_string(),
-            bind_dn: "cn=admin1,dc=de".to_string(),
-            password: "secret1".to_string(),
+            bind_dn: Some("cn=admin1,dc=de".to_string()),
+            password: Some("secret1".to_string()),
             base_dn: "dc=de".to_string(),
         };
         let service = Service {
@@ -187,8 +236,8 @@ mod test {
         assert_eq!(ldap_services_map.len(), 1);
         let entry = ldap_services_map.get("active_dir").unwrap();
         assert_eq!(entry.url, "ldap://ldap1.provider.de:389");
-        assert_eq!(entry.bind_dn, "cn=admin1,dc=de");
-        assert_eq!(entry.password, "secret1");
+        assert_eq!(entry.bind_dn, Some("cn=admin1,dc=de".to_string()));
+        assert_eq!(entry.password, Some("secret1".to_string()));
         assert_eq!(entry.base_dn, "dc=de");
     }
 
@@ -196,14 +245,14 @@ mod test {
     fn test_map_ldap_services_name_duplicate() {
         let credentials1 = LdapService {
             url: "ldap://ldap1.provider.de:389".to_string(),
-            bind_dn: "cn=admin1,dc=de".to_string(),
-            password: "secret1".to_string(),
+            bind_dn: Some("cn=admin1,dc=de".to_string()),
+            password: Some("secret1".to_string()),
             base_dn: "dc=de".to_string(),
         };
         let credentials2 = LdapService {
             url: "ldap://ldap2.consumer.fr:389".to_string(),
-            bind_dn: "cn=admin2,dc=fr".to_string(),
-            password: "secret2".to_string(),
+            bind_dn: Some("cn=admin2,dc=fr".to_string()),
+            password: Some("secret2".to_string()),
             base_dn: "dc=fr".to_string(),
         };
         let service1 = Service {
@@ -272,13 +321,13 @@ mod test {
         assert_eq!(ldap_services.len(), 2);
         let ldap1 = ldap_services.get("ldap1").unwrap();
         assert_eq!(ldap1.url, "ldap://ldap1.provider.de:389");
-        assert_eq!(ldap1.bind_dn, "cn=admin1,dc=de");
-        assert_eq!(ldap1.password, "secret1");
+        assert_eq!(ldap1.bind_dn, Some("cn=admin1,dc=de".to_string()));
+        assert_eq!(ldap1.password, Some("secret1".to_string()));
         assert_eq!(ldap1.base_dn, "dc=de");
         let ldap1 = ldap_services.get("ldap2").unwrap();
         assert_eq!(ldap1.url, "ldap://ldap2.consumer.de:389");
-        assert_eq!(ldap1.bind_dn, "cn=admin2,dc=de");
-        assert_eq!(ldap1.password, "secret2");
+        assert_eq!(ldap1.bind_dn, Some("cn=admin2,dc=de".to_string()));
+        assert_eq!(ldap1.password, Some("secret2".to_string()));
         assert_eq!(ldap1.base_dn, "dc=de");
     }
 

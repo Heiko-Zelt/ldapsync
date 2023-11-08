@@ -64,6 +64,15 @@ macro_rules! RC_INSUFFICIENT_ACCESS_RIGHTS {
 #[allow(unused_imports)]
 pub(crate) use RC_INSUFFICIENT_ACCESS_RIGHTS;
 
+#[allow(unused_macros)]
+macro_rules! RC_UNWILLING_TO_PERFORM {
+    () => {
+        53
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use RC_UNWILLING_TO_PERFORM;
+
 // TODO global static hash map?
 pub fn result_text(result_code: u32) -> String {
     match result_code {

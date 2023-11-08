@@ -14,15 +14,22 @@ use crate::synchronization::{SyncStatistics, Synchronization};
 use chrono::{DateTime, Utc};
 use ldap3::{LdapError, LdapResult};
 use log::{error, info};
+use env_logger::{Builder, Target};
 use tokio::time::sleep;
 use std::collections::HashMap;
+use std::env;
 
 /// main function.
 /// reads configuration from environment variables.
 /// If the configuration is ok, start the actual main function lets_go().
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    let mut builder = Builder::from_default_env();
+    builder.target(Target::Stdout);
+    builder.init();
+    //init_rust_log();
+    //env_logger::init();
+
     info!("{}", "ldapsync main()");
     AppConfig::log_platform_info();
     let read_result = AppConfig::read_env_vars();
@@ -36,6 +43,23 @@ async fn main() {
     }
     info!("Program finished.")
 }
+
+/// write to stdout instead of stderr.
+/// because cf (Cloud Foundry Command Line Interface) shows messages on stdterr in red, on stdout in white.
+/*
+fn init_rust_log() {
+    let mut builder = Builder::new();
+    builder.target(Target::Stdout);
+    let rust_log = env::var("RUST_LOG");
+    match rust_log {
+        Ok(rl) => {
+            builder.parse_env(rl);
+            builder.init();
+        },
+        Err(_) => { println!(r#"Warning: The Environment variable RUST_LOG is not set."#)}
+    }
+}
+ */
 
 /// after environment variables have been read
 async fn params_read(params_map: &HashMap<&str, String>) {

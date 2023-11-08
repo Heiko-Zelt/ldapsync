@@ -1,4 +1,4 @@
-use crate::cf_services::{map_ldap_services, parse_service_types, LdapService};
+use crate::cf_services::{map_ldap_services, parse_service_types, LdapService, LdapServiceError};
 use crate::synchronization_config::SynchronizationConfig;
 use log::{debug, info};
 use once_cell::sync::Lazy;
@@ -72,6 +72,10 @@ pub enum AppConfigError {
     DaemonButNoSleep,
     /// LS_SLEEP is set but LS_DAEMON is "false"
     SleepButNoDaemon,
+    LdapServiceError {
+        service_name: String,
+        ldap_service_error: LdapServiceError
+    }
 }
 
 #[derive(Debug)]
@@ -324,6 +328,13 @@ impl AppConfig {
                 });
             }
         }
+        for (name, ldap_service) in self.ldap_services.iter() {
+            let result = ldap_service.analyze_semantic();
+            match result {
+                Some(err) => { return Some(AppConfigError::LdapServiceError { service_name: name.to_string(), ldap_service_error: err })}, 
+                None => {}
+            }
+        }
         None
     }
 
@@ -443,6 +454,46 @@ mod test {
     }
 
     #[test]
+    fn test_from_map_vcap_services_password_but_no_bind_dn() {
+        let param_map = HashMap::from([
+            (DAEMON, "true".to_string()),
+            (JOB_SLEEP, "10 sec".to_string()),
+            (DRY_RUN, "true".to_string()),
+            (VCAP_SERVICES, indoc! {r#"
+            {
+                "user-provided": [
+                    {
+                        "name": "ldap1",
+                        "credentials": {
+                            "base_dn": "dc=de",
+                            "password": "secret1",
+                            "url": "ldap://ldap1.provider.de:389"
+                        }
+                    }
+                ]
+            }"#}
+            .to_string()),
+            (SYNCHRONIZATIONS, "[]".to_string()),
+            (ATTRS, "cn ou o sn givenName description".to_string()),
+        ]);
+
+        let result = AppConfig::from_map(&param_map);
+        debug!("result: {:?}", result);
+        match result {
+            Err(AppConfigError::LdapServiceError {
+                service_name: name,
+                ldap_service_error: err,
+            }) => {
+                assert_eq!(name, "ldap1");
+                assert_eq!(err, LdapServiceError::PasswordButNoBindDN);
+            }
+            _ => {
+                panic!("unexpected result");
+            }
+        }
+    }
+
+    #[test]
     fn test_from_map_exclude_attrs_without_special_selector() {
         let param_map = HashMap::from([
             (DAEMON, "true".to_string()),
@@ -486,7 +537,7 @@ mod test {
                                 "password": "secret1",
                                 "url": "ldap://ldap1.provider.de:389"
                             }
-                        },
+                        }
                     ]
                 }"#}
                 .to_string(),
@@ -597,8 +648,8 @@ mod test {
           }
         ]
       }"#}), HashMap::from([
-        ("ldap1".to_string(), LdapService { url: "ldap://ldap1.provider.de:389".to_string(), bind_dn: "cn=admin1,dc=de".to_string(), password: "secret1".to_string(), base_dn: "dc=de".to_string() }),
-        ("ldap2".to_string(), LdapService { url: "ldap://ldap2.consumer.de:389".to_string(), bind_dn: "cn=admin2,dc=de".to_string(), password: "secret2".to_string(), base_dn: "dc=de".to_string() })
+        ("ldap1".to_string(), LdapService { url: "ldap://ldap1.provider.de:389".to_string(), bind_dn: Some("cn=admin1,dc=de".to_string()), password: Some("secret1".to_string()), base_dn: "dc=de".to_string() }),
+        ("ldap2".to_string(), LdapService { url: "ldap://ldap2.consumer.de:389".to_string(), bind_dn: Some("cn=admin2,dc=de".to_string()), password: Some("secret2".to_string()), base_dn: "dc=de".to_string() })
     ]))]
     #[case(Some(indoc!{ r#"{
         "user-provided": []

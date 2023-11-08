@@ -489,15 +489,15 @@ mod test {
         //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
         let source_service = LdapService {
             url: source_url,
-            bind_dn: source_bind_dn,
-            password: source_password,
+            bind_dn: Some(source_bind_dn),
+            password: Some(source_password),
             base_dn: source_base_dn.clone(),
         };
 
         let target_service = LdapService {
             url: target_url,
-            bind_dn: target_bind_dn,
-            password: target_password,
+            bind_dn: Some(target_bind_dn),
+            password: Some(target_password),
             base_dn: target_base_dn.clone(),
         };
 
@@ -618,15 +618,15 @@ mod test {
 
         let source_service = LdapService {
             url: source_url,
-            bind_dn: source_bind_dn,
-            password: source_password,
+            bind_dn: Some(source_bind_dn),
+            password: Some(source_password),
             base_dn: source_base_dn.clone(),
         };
 
         let target_service = LdapService {
             url: target_url,
-            bind_dn: target_bind_dn,
-            password: target_password,
+            bind_dn: Some(target_bind_dn),
+            password: Some(target_password),
             base_dn: target_base_dn.clone(),
         };
 
@@ -781,15 +781,15 @@ mod test {
 
         let source_service = LdapService {
             url: source_url,
-            bind_dn: source_bind_dn,
-            password: source_password,
+            bind_dn: Some(source_bind_dn),
+            password: Some(source_password),
             base_dn: source_base_dn.clone(),
         };
 
         let target_service = LdapService {
             url: target_url,
-            bind_dn: target_bind_dn,
-            password: target_password,
+            bind_dn: Some(target_bind_dn),
+            password: Some(target_password),
             base_dn: target_base_dn.clone(),
         };
 
@@ -1156,14 +1156,14 @@ mod test {
         .await;
         let source_service = LdapService {
             url: source_url,
-            bind_dn: source_bind_dn,
-            password: source_password,
+            bind_dn: Some(source_bind_dn),
+            password: Some(source_password),
             base_dn: source_base_dn.clone(),
         };
         let target_service = LdapService {
             url: target_url,
-            bind_dn: target_bind_dn,
-            password: target_password,
+            bind_dn: Some(target_bind_dn),
+            password: Some(target_password),
             base_dn: target_base_dn.clone(),
         };
         let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service.clone())]);
