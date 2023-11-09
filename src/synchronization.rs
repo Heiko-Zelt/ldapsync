@@ -1327,6 +1327,13 @@ mod test {
             ObjectClass: inetOrgPerson
             cn: un012345
             sn: von Stein
+
+            # ignore because DN is excluded
+            dn: o=dont_delete,o=local,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: dont_delete
+            modifyTimestamp: 20231019182738Z
         
             # to be deleted
             dn: o=de,ou=Users,dc=test
@@ -1376,6 +1383,12 @@ mod test {
             cn: un012345
             ObjectClass: inetOrgPerson
             sn: von Stein
+
+            # ignore because DN is excluded
+            dn: o=dont_delete,o=local,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: dont_delete
 
             # to be added
             dn: cn=new012345,ou=Users,dc=test
@@ -1450,8 +1463,6 @@ mod test {
         print!("after {:?}", after);
 
         assert_vec_search_entries_eq(&after, &expected);
-
     }
-
 
 }

@@ -116,6 +116,7 @@ impl AppConfig {
             SYNCHRONIZATIONS,
             DAEMON,
             FILTER,
+            EXCLUDE_DNS,
             ATTRS,
             EXCLUDE_ATTRS,
             JOB_SLEEP,
@@ -662,6 +663,20 @@ mod test {
         let given = live_longer.as_ref();
 
         let result = AppConfig::parse_exclude_attrs(&given);
+        assert_eq!(format!("{:?}", result), expected);
+    }
+
+    #[rstest]
+    #[case(None, "Ok(None)")]
+    #[case(Some("(?i)o=local$"), r#"Ok(Some(Regex("(?i)o=local$")))"#)]
+    fn test_parse_exclude_dns(#[case] hay: Option<&str>, #[case] expected: &str) {
+        let live_longer = match hay {
+            Some(h) => Some(String::from(h)),
+            None => None,
+        };
+        let given = live_longer.as_ref();
+
+        let result = AppConfig::parse_exclude_dns(&given);
         assert_eq!(format!("{:?}", result), expected);
     }
 
