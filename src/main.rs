@@ -87,6 +87,7 @@ async fn lets_go(app_config: &AppConfig) {
             sync_config: sync_config,
             dry_run: app_config.dry_run,
             filter: &app_config.filter,
+            exclude_dns: &app_config.exclude_dns,
             attrs: &attrs_vec,
             exclude_attrs: &app_config.exclude_attrs,
         })

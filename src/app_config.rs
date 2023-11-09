@@ -14,6 +14,7 @@ pub const DAEMON: &str = "LS_DAEMON";
 
 /// default is "(objectClass=*)"
 pub const FILTER: &str = "LS_FILTER";
+pub const EXCLUDE_DNS: &str = "LS_EXCLUDE_DNS";
 pub const ATTRS: &str = "LS_ATTRS";
 pub const EXCLUDE_ATTRS: &str = "LS_EXCLUDE_ATTRS";
 pub const JOB_SLEEP: &str = "LS_SLEEP";
@@ -87,6 +88,7 @@ pub struct AppConfig {
     pub job_sleep: Option<Duration>,
     pub dry_run: bool,
     pub filter: String,
+    pub exclude_dns: Option<Regex>,
     pub attrs: HashSet<String>,
     pub exclude_attrs: Option<Regex>,
     pub ldap_services: HashMap<String, LdapService>,
@@ -295,6 +297,23 @@ impl AppConfig {
         }
     }
 
+    fn parse_exclude_dns(
+        exclude_attrs: &Option<&String>,
+    ) -> Result<Option<Regex>, AppConfigError> {
+        match exclude_attrs {
+            Some(s) => {
+                debug!("{}: {}", EXCLUDE_DNS, s);
+                Ok(Some(Regex::new(&s).map_err(|err| {
+                    AppConfigError::EnvVarParseRegexError {
+                        env_var_name: EXCLUDE_DNS.to_string(),
+                        cause: err,
+                    }
+                })?))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// parse regular expesssions, booleans, JSON code and Duration in the configuration
     fn parse(param_map: &HashMap<&str, String>) -> Result<AppConfig, AppConfigError> {
         let synchronizations_vec = Self::parse_synchronizations(&param_map.get(SYNCHRONIZATIONS))?;
@@ -303,15 +322,17 @@ impl AppConfig {
         let daemon_bool = Self::parse_daemon(&param_map.get(DAEMON))?;
         let dry_run_bool = Self::parse_dry_run(&param_map.get(DRY_RUN))?;
         let filter_string = Self::parse_filter(&param_map.get(FILTER))?;
+        let exclude_dns_regex = Self::parse_exclude_dns(&param_map.get(EXCLUDE_DNS))?;
         let attrs_set = Self::parse_attrs(&param_map.get(ATTRS))?;
-        let exclude_attrs_pattern = Self::parse_exclude_attrs(&param_map.get(EXCLUDE_ATTRS))?;
+        let exclude_attrs_regex = Self::parse_exclude_attrs(&param_map.get(EXCLUDE_ATTRS))?;
         let config = AppConfig {
             daemon: daemon_bool,
             job_sleep: job_sleep_duration,
             dry_run: dry_run_bool,
             filter: filter_string,
+            exclude_dns: exclude_dns_regex,
             attrs: attrs_set,
-            exclude_attrs: exclude_attrs_pattern,
+            exclude_attrs: exclude_attrs_regex,
             ldap_services: ldap_services_map,
             synchronization_configs: synchronizations_vec,
         };

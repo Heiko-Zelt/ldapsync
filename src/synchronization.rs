@@ -53,6 +53,7 @@ pub struct Synchronization<'a> {
     pub ldap_services: &'a HashMap<String, LdapService>,
     pub sync_config: &'a SynchronizationConfig,
     pub filter: &'a String,
+    pub exclude_dns: &'a Option<Regex>,
     pub attrs: &'a Vec<String>,
     pub exclude_attrs: &'a Option<Regex>,
     pub dry_run: bool,
@@ -65,6 +66,7 @@ impl<'a> Synchronization<'a> {
     /// - for every DN: sync_delete() & sync_modify()
     /// - disconnects
     /// returns: number of touched (added, modified and delted) entries)
+    /// TODO: Wenn zu synchronisierender Base-DN im Ziel nicht existiert, dann Eintrag anlegen (statt RC 32 no such object ausgeben).
     pub async fn synchronize(&self, old_sync_datetime: Option<DateTime<Utc>>) -> Result<SyncStatistics, LdapError> {
         let source_service = self.ldap_services.get(&self.sync_config.source).unwrap();
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
@@ -86,6 +88,7 @@ impl<'a> Synchronization<'a> {
                 &target_service.base_dn,
                 dn,
                 self.filter,
+                self.exclude_dns,
                 self.dry_run,
             )
             .await?;
@@ -97,6 +100,7 @@ impl<'a> Synchronization<'a> {
                 &dn,
                 &sync_ldap_timestamp,
                 self.filter,
+                self.exclude_dns,
                 self.attrs,
                 self.exclude_attrs,
                 self.dry_run,
@@ -183,12 +187,13 @@ impl<'a> Synchronization<'a> {
         target_base_dn: &str,
         sync_dn: &str,
         filter: &str,
+        exclude_dns: &Option<Regex>,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
         info!(r#"sync_delete: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}")"#, source_base_dn, target_base_dn, sync_dn);
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
-        let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn, filter).await?;
+        let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn, filter, exclude_dns).await?;
         
         debug!("sync_delete: target DNs:");
         // TODO nur ausführen, wenn log level debug
@@ -199,7 +204,7 @@ impl<'a> Synchronization<'a> {
             Ok(0)
         } else {
             let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
-            let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn, filter).await?;
+            let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn, filter, exclude_dns).await?;
             debug!("sync_delete: source DNs:");
             // TODO nur ausführen, wenn log level debug
             log_debug_dns("sync_delete:", &source_norm_dns);
@@ -251,6 +256,7 @@ impl<'a> Synchronization<'a> {
         sync_dn: &str,
         old_modify_timestamp: &Option<String>,
         filter: &str,
+        exclude_dns: &Option<Regex>,
         attrs: &Vec<String>,
         exclude_attrs: &Option<Regex>,
         dry_run: bool,
@@ -261,12 +267,14 @@ impl<'a> Synchronization<'a> {
         );
         // im Quell-LDAP alle neulich geänderten Einträge suchen
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
+        let target_sync_dn = join_2_dns(&sync_dn, &source_base_dn);
 
         let mut source_search_entries = search_modified_entries_attrs_filtered(
             source_ldap,
             &source_sync_dn,
             old_modify_timestamp,
             filter,
+            exclude_dns,
             attrs,
             exclude_attrs,
         )
@@ -282,12 +290,10 @@ impl<'a> Synchronization<'a> {
             source_sync_dn, source_search_entries.len()
         );
 
-        let source_base_dn_len = source_base_dn.len();
         for source_search_entry in source_search_entries {
             let modified = Self::sync_modify_one_entry(
                 target_ldap,
-                source_base_dn_len,
-                target_base_dn,
+                &target_sync_dn,
                 source_search_entry,
                 attrs,
                 exclude_attrs,
@@ -305,7 +311,6 @@ impl<'a> Synchronization<'a> {
 
     pub async fn sync_modify_one_entry(
         target_ldap: &mut Ldap,
-        source_base_dn_len: usize,
         target_base_dn: &str,
         source_search_entry: SearchEntry,
         attrs: &Vec<String>,
@@ -317,9 +322,7 @@ impl<'a> Synchronization<'a> {
             warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry."#);
         }
 
-        let mut trunc_dn = source_search_entry.dn.clone();
-        truncate_dn(&mut trunc_dn, source_base_dn_len);
-        let target_dn = join_2_dns(&trunc_dn, target_base_dn);
+        let target_dn = join_2_dns(&source_search_entry.dn, target_base_dn);
         
         let target_search_result = 
             search_one_entry_by_dn(target_ldap, &target_dn, attrs).await;
@@ -522,6 +525,7 @@ mod test {
             "ou=Users",
             &Some(old_modify_timestamp),
             "(objectClass=*)",
+            &None,
             &vec!["*".to_string()],
             &Some(Regex::new("^givenname$").unwrap()),
             true,
@@ -702,6 +706,7 @@ mod test {
             &target_base_dn,
             "ou=Users",
             "(objectClass=*)",
+            &None,
             false,
         )
         .await.unwrap();
@@ -813,6 +818,7 @@ mod test {
             &target_base_dn,
             "o=de,ou=Users",
             "(objectClass=*)",
+            &None,
             false,
         )
         .await;
@@ -1187,6 +1193,7 @@ mod test {
             ldap_services: &ldap_services,
             sync_config: &sync_config,
             filter: &"(objectClass=*)".to_string(),
+            exclude_dns: &None,
             attrs: &vec!["*".to_string()],
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
             dry_run: false,
@@ -1205,6 +1212,7 @@ mod test {
 
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
         let after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
+        print!("after {:?}", after);
 
         assert_vec_search_entries_eq(&after, &expected);
 

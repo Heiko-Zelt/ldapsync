@@ -184,18 +184,20 @@ export LS_SYNCHRONIZATIONS="[
 
 ## Environment Variables
 
-| Name        | Mandatory | Meaning                                                                                                                   |
-| ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------- |
-| VCAP_SERVICES | yes     | Data to connect to LDAP servers (in typical Cloud Foundry syntax). Only simple authentication with username and password is supported. |
+| Name           | Mandatory | Meaning                                                                                                                   |
+| -------------- | --------- | ------------------------------------------------------------------------------------------------------------------------- |
+| VCAP_SERVICES  | yes     | Data to connect to LDAP servers (in typical Cloud Foundry syntax). Only simple authentication with username and password is supported. |
 | LS_SYNCHRONIZATIONS | yes | Service names of source and target directory, like defined in VCAP_SERVICES and subtree(s) wich should be synchronized. |
-| LS_DAEMON   | yes       | "true" to synchronize continiously or "false" to run only once.                                                           |
-| LS_SLEEP    | no        | Time to sleep between runs, if in daemon mode. Examples "10 sec" or "15 min".                                             |
-| LS_DRY_RUN  | yes       | "true" to only log what would be changed, "false" to actually modify content of target directory.                         |
-| LS_FILTER   | no        | example: "(objectClass=person)", default value is "(objectClass=*)"                                                       |
-| LS_ATTRS    | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
-| LS_EXCLUDE_ATTRS | no   | Regular expression for attribute names to be ignored.                                                                     |
-| RUST_LOG    | no        | Log-Level: "trace", "debug", "info", "warn", "error" or "off", see: https://docs.rs/env_logger/latest/env_logger/         |
+| LS_DAEMON      | yes       | "true" to synchronize continiously or "false" to run only once.                                                           |
+| LS_SLEEP       | no        | Time to sleep between runs, if in daemon mode. Examples "10 sec" or "15 min".                                             |
+| LS_DRY_RUN     | yes       | "true" to only log what would be changed, "false" to actually modify content of target directory.                         |
+| LS_FILTER      | no        | example: "(objectClass=person)", default value is "(objectClass=*)"                                                       |
+| LS_EXCLUDE_DNS | no        | example: "(?i),cn=local$", regular expression to filter DNs. DNs are relative to the Base-DN, of the Synchronization. *)  |
+| LS_ATTRS       | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
+| LS_EXCLUDE_ATTRS | no      | Regular expression for attribute names to be ignored.                                                                     |
+| RUST_LOG       | no        | Log-Level: "trace", "debug", "info", "warn", "error" or "off", see: https://docs.rs/env_logger/latest/env_logger/         |
 
+*) Not all LDAP-Server support filtering DNs by substrings. This filter works on the client side. The regular expression should ignore case.
 
 ## Additional information
 

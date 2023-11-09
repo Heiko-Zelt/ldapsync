@@ -111,6 +111,12 @@ pub fn truncate_dn(dn: &mut String, base_dn_len: usize) {
     dn.truncate(dn.len() - base_dn_len - 1); // comma auch abschneiden
 }
 
+/// truncate base DN and convert to lowercase
+pub fn normalize_dn(dn: &mut String, base_dn_len: usize) -> String {
+    truncate_dn(dn, base_dn_len);
+    dn.to_lowercase()
+}
+
 pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
     format!(
         "{}{:02}{:02}{:02}{:02}{:02}Z",
@@ -143,28 +149,42 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     Ok(ldap)
 }
 
-/// Converts the result entries of a ldap search into a set of DNs.
+/// Converts the result entries of an ldap search into a set of DNs.
 /// The DNs are normalized to lowercase and the Base DN is truncated.
-/// If the resulting DN is not the empty string, it ends with a comma.
 /// Hash set is used to efficiently calculate the difference to another set.
+/// DNs may be filtered out by a regular expression.
 pub fn result_entries_to_norm_dns(
     result_entries: &Vec<ResultEntry>,
     base_dn: &str,
+    exclude_dns: &Option<Regex>
 ) -> HashSet<String> {
     let base_dn_len = base_dn.len();
     let mut norm_dns = HashSet::new();
+
+    // TODO stream processing, inter().map().filter().collect()
     for result_entry in result_entries {
         let search_entry = SearchEntry::construct(result_entry.clone());
         let mut dn = search_entry.dn;
         truncate_dn(&mut dn, base_dn_len); // in bytes (not characters)
         let norm_dn = dn.to_lowercase();
+        match exclude_dns {
+            Some(regex) => {
+                if regex.is_match(&norm_dn)  {
+                    debug!(r#"ignoring dn: "{}""#, &norm_dn);
+                } else {
+                    norm_dns.insert(norm_dn);
+                }
+            }
+            None => {
+                norm_dns.insert(norm_dn);
+            }
+        }
         //debug!(r#"result_entries_to_norm_dns: norm_dn: "{}""#, norm_dn);
-        norm_dns.insert(norm_dn);
     }
     norm_dns
 }
 
-pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str, filter: &str) -> Result<HashSet<String>, LdapError> {
+pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str, filter: &str, exclude_dns: &Option<Regex>) -> Result<HashSet<String>, LdapError> {
     debug!(
         r#"search_norm_dns: search for DNs from base: "{}""#,
         base_dn
@@ -183,7 +203,7 @@ pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str, filter: &str) -> Re
         "search_norm_dns: found number of entries: {}",
         result_entries.len()
     );
-    let norm_dns = result_entries_to_norm_dns(&result_entries, base_dn);
+    let norm_dns = result_entries_to_norm_dns(&result_entries, base_dn, exclude_dns);
     Ok(norm_dns)
 }
 
@@ -259,17 +279,19 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
 */
 
 /// Searches a subtree for recently modified entries.
-/// Attribute names are normalized to lowercase
-/// and attributes are filtered.
-/// TODO Error, wenn base_dn gar nicht existiert
+/// DNs are normalized and Entries are filtered.
+/// Attribute names are normalized to lowercase.
+/// Attributes are filtered.
 pub async fn search_modified_entries_attrs_filtered(
     ldap: &mut Ldap,
     base_dn: &str,
     old_modify_timestamp: &Option<String>,
     filter: &str,
+    exclude_dns: &Option<Regex>,
     attrs: &Vec<String>,
     exclude_attrs: &Option<Regex>,
 ) -> Result<Vec<SearchEntry>, LdapError> {
+    let base_dn_len = base_dn.len();
     let complete_filter = match old_modify_timestamp {
         Some(timestamp) => format!("(&{}(modifyTimestamp>={}))", filter, timestamp),
         None => filter.to_string(),
@@ -288,6 +310,17 @@ pub async fn search_modified_entries_attrs_filtered(
         match result_entry {
             Some(entry) => {
                 let mut search_entry = SearchEntry::construct(entry.clone());
+                truncate_dn(&mut search_entry.dn, base_dn_len);
+                match exclude_dns {
+                    Some(regex) => {
+                        if regex.is_match(&search_entry.dn) {
+                             debug!(r#"ignoring Entry: "{}""#, search_entry.dn);
+                        } else {
+                            continue;
+                        }
+                    },
+                    None => {}
+                }
                 search_entry.attrs = attr_names_to_lowercase(&search_entry.attrs);
                 match exclude_attrs {
                     Some(ex) => search_entry.attrs = filter_attrs(&search_entry.attrs, ex),
@@ -1011,7 +1044,7 @@ pub mod test {
         let attrs = vec!["*".to_string()];
         let ex_attrs = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
         let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
-            dn: cn=new012345,ou=Users,dc=test
+            dn: cn=new012345
             objectclass: inetOrgPerson
             givenname: Amira
             userpassword: welt123!"
@@ -1023,6 +1056,7 @@ pub mod test {
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
             "(objectClass=*)",
+            &None,
             &attrs,
             &ex_attrs,
         )
@@ -1076,6 +1110,7 @@ pub mod test {
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
             "(objectClass=*)",
+            &None,
             &attrs,
             &ex_attrs,
         )
@@ -1138,7 +1173,7 @@ pub mod test {
             .into_iter()
             .collect();
 
-        let norm_dns = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)")
+        let norm_dns = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)", &None)
             .await
             .unwrap();
 
@@ -1174,7 +1209,7 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
-        let result = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)").await;
+        let result = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)", &None).await;
 
         //debug!("result: {:?}", &result);
         //Err(LdapResult { result: LdapResult { rc: 32, matched: "dc=test", text: "", refs: [], ctrls: [] } })
