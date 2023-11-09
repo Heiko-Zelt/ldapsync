@@ -314,10 +314,9 @@ pub async fn search_modified_entries_attrs_filtered(
                 match exclude_dns {
                     Some(regex) => {
                         if regex.is_match(&search_entry.dn) {
-                             debug!(r#"ignoring Entry: "{}""#, search_entry.dn);
-                        } else {
+                            debug!(r#"ignoring Entry: "{}""#, search_entry.dn);
                             continue;
-                        }
+                        };
                     },
                     None => {}
                 }

@@ -432,6 +432,7 @@ mod test {
             
             # to be added
             dn: cn=xy012345,o=AB,o=de,ou=Users,dc=test
+            cn: xy012345
             objectClass: inetOrgPerson
             sn: Müller
             givenName: André
@@ -477,6 +478,7 @@ mod test {
 
             # ignored
             dn: cn=xy012345,o=XY,o=de,ou=Users,dc=test
+            cn: xy012345
             objectClass: inetOrgPerson
             sn: Müller
             givenName: André
@@ -1215,7 +1217,241 @@ mod test {
         print!("after {:?}", after);
 
         assert_vec_search_entries_eq(&after, &expected);
+    }
+
+    #[tokio::test]
+    async fn test_synchronisation_exclude_by_dn() {
+        let _ = env_logger::try_init();
+
+        let source_plain_port = next_port();
+        let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
+        let source_bind_dn = "cn=admin,dc=test".to_string();
+        let source_password = "secret".to_string();
+        let source_base_dn = "dc=test".to_string();
+        let source_content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+            modifyTimestamp: 20231019182734Z
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            cn: admin
+            sn: Admin
+            userPassword: secret
+            modifyTimestamp: 20231019182735Z
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 20231019182736Z
+            description: add this
+    
+            # ignore because DN is excluded
+            dn: o=local,ou=Users,dc=test
+            objEctClass: top
+            ObjectClass: organization
+            o: local
+            modifyTimestamp: 20231019182737Z
+
+            # ignore because DN is excluded
+            dn: cn=un012345,o=local,ou=Users,dc=test
+            ObjectClass: inetOrgPerson
+            cn: un012345
+            modifyTimestamp: 20230101131313Z
+            sn: von Stein
+
+            # ignore because DN is excluded
+            dn: o=AB,o=local,ou=Users,dc=test
+            objectClass: top
+            objectClass: organization
+            o: AB
+            modifyTimestamp: 20231019182738Z
+            
+            # to be modified
+            dn: cn=xy012345,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: new_password!
+            modifyTimestamp: 20231019182739Z
+            description: changed
+            
+            # to be added
+            dn: cn=new012345,ou=Users,dc=test
+            cn: new012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: some_password!
+            modifyTimestamp: 20231019182739Z
+            description: changed"
+        };
+
+        let target_plain_port = next_port();
+        let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
+        let target_bind_dn = "cn=admin,dc=test".to_string();
+        let target_password = "secret".to_string();
+        let target_base_dn = "dc=test".to_string();
+        let target_content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            cn: admin
+            sn: Admin
+            userPassword: secret
+    
+            # to be modified
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+
+            # ignore because DN is excluded
+            dn: o=local,ou=Users,dc=test
+            objEctClass: top
+            ObjectClass: organization
+            o: local
+
+            # ignore because DN is excluded
+            dn: cn=un012345,o=local,ou=Users,dc=test
+            ObjectClass: inetOrgPerson
+            cn: un012345
+            sn: von Stein
+        
+            # to be deleted
+            dn: o=de,ou=Users,dc=test
+            ObjectClass: top
+            objectClass: organization
+            o: de
+            
+            # to be modified
+            dn: cn=xy012345,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: old_password!"
+        };
+
+        let expected = parse_ldif_as_search_entries(indoc! { "
+            # not synchronized
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            # not synchronized
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            cn: admin
+            sn: Admin
+            userPassword: secret
+
+            # modified
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            description: add this
+
+            # ignore because DN is excluded
+            dn: o=local,ou=Users,dc=test
+            objEctClass: top
+            ObjectClass: organization
+            o: local
+
+            # ignore because DN is excluded
+            dn: cn=un012345,o=local,ou=Users,dc=test
+            cn: un012345
+            ObjectClass: inetOrgPerson
+            sn: von Stein
+
+            # to be added
+            dn: cn=new012345,ou=Users,dc=test
+            cn: new012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            userPassword: some_password!
+            description: changed
+            
+            # to be modified
+            dn: cn=xy012345,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: new_password!
+            description: changed"
+        }).unwrap();
+        let _source_server = start_test_server(
+            source_plain_port,
+            &source_base_dn,
+            source_content,
+        )
+        .await;
+        let _target_server = start_test_server(
+            target_plain_port,
+            &target_base_dn,
+            target_content,
+        )
+        .await;
+        let source_service = LdapService {
+            url: source_url,
+            bind_dn: Some(source_bind_dn),
+            password: Some(source_password),
+            base_dn: source_base_dn.clone(),
+        };
+        let target_service = LdapService {
+            url: target_url,
+            bind_dn: Some(target_bind_dn),
+            password: Some(target_password),
+            base_dn: target_base_dn.clone(),
+        };
+        let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service.clone())]);
+        let sync_config = SynchronizationConfig {
+            source: "ldap1".to_string(),
+            target: "ldap2".to_string(),
+            base_dns: vec!["ou=Users".to_string()],
+        };
+        let synchronization = Synchronization {
+            ldap_services: &ldap_services,
+            sync_config: &sync_config,
+            filter: &"(objectClass=*)".to_string(),
+            exclude_dns: &Some(Regex::new("(?i)o=local$").unwrap()),
+            attrs: &vec!["*".to_string()],
+            exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
+            dry_run: false,
+        };
+        let date_time = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
+
+        
+        let result = synchronization.synchronize(Some(date_time)).await.unwrap();
+
+
+        info!("result: {:?}", result);
+        assert_eq!(result.recently_modified, 3); // of 5. one entry is very old
+        assert_eq!(result.added, 1);
+        assert_eq!(result.attrs_modified, 2);
+        assert_eq!(result.deleted, 1);
+
+        let mut target_ldap = simple_connect(&target_service).await.unwrap();
+        let after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
+        print!("after {:?}", after);
+
+        assert_vec_search_entries_eq(&after, &expected);
 
     }
+
 
 }
