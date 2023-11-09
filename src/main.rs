@@ -5,6 +5,7 @@ pub mod ldif;
 //pub mod serde_search_entry;
 pub mod synchronization;
 pub mod synchronization_config;
+pub mod rewrite_engine;
 #[macro_use]
 pub mod ldap_result_codes;
 
