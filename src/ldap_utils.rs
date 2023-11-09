@@ -164,13 +164,13 @@ pub fn result_entries_to_norm_dns(
     norm_dns
 }
 
-pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<String>, LdapError> {
+pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str, filter: &str) -> Result<HashSet<String>, LdapError> {
     debug!(
         r#"search_norm_dns: search for DNs from base: "{}""#,
         base_dn
     );
     let search_result = ldap
-        .search(base_dn, Scope::Subtree, "(objectClass=*)", vec!["dn"])
+        .search(base_dn, Scope::Subtree, filter, vec!["dn"])
         .await?
         .success()?;
 
@@ -189,10 +189,10 @@ pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str) -> Result<HashSet<S
 
 /// returns exactly one entry if found or an LdapError
 /// Err(LdapResult { result: LdapResult { rc: 32, matched: "ou=Users,dc=test", text: "", refs: [], ctrls: [] } })
-pub async fn search_one_entry_by_dn(ldap: &mut Ldap, dn: &str) -> Result<SearchEntry, LdapError> {
+pub async fn search_one_entry_by_dn(ldap: &mut Ldap, dn: &str, attrs: &Vec<String>) -> Result<SearchEntry, LdapError> {
     debug!(r#"search_one_entry_by_dn: "{}""#, dn);
     let search_result = ldap
-        .search(dn, Scope::Base, "(objectClass=*)", vec!["*"])
+        .search(dn, Scope::Base, "(objectClass=*)", attrs)
         .await?
         .success()?;
     let result_entries = search_result.0;
@@ -266,19 +266,20 @@ pub async fn search_modified_entries_attrs_filtered(
     ldap: &mut Ldap,
     base_dn: &str,
     old_modify_timestamp: &Option<String>,
+    filter: &str,
     attrs: &Vec<String>,
     exclude_attrs: &Option<Regex>,
 ) -> Result<Vec<SearchEntry>, LdapError> {
-    let filter = match old_modify_timestamp {
-        Some(timestamp) => format!("(modifyTimestamp>={})", timestamp),
-        None => "(objectClass=*)".to_string(),
+    let complete_filter = match old_modify_timestamp {
+        Some(timestamp) => format!("(&{}(modifyTimestamp>={}))", filter, timestamp),
+        None => filter.to_string(),
     };
     debug!(
         r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}""#,
         base_dn, filter
     );
     let mut search_stream = ldap
-        .streaming_search(&base_dn, Scope::Subtree, &filter, attrs)
+        .streaming_search(&base_dn, Scope::Subtree, &complete_filter, attrs)
         .await?;
     let mut search_entries: Vec<SearchEntry> = Vec::new();
     loop {
@@ -727,7 +728,8 @@ pub mod test {
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let some_dn = "cn=xy012345,ou=Users,dc=test";
-        let some_entry = search_one_entry_by_dn(&mut ldap_conn, some_dn)
+        let attrs = vec!["*".to_string()];
+        let some_entry = search_one_entry_by_dn(&mut ldap_conn, some_dn, &attrs)
             .await
             .unwrap();
         assert_eq!(some_entry.dn, some_dn);
@@ -784,7 +786,8 @@ pub mod test {
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let some_dn = "cn=xy012345,ou=Users,dc=test";
-        let result = search_one_entry_by_dn(&mut ldap_conn, some_dn)
+        let attrs = vec!["*".to_string()];
+        let result = search_one_entry_by_dn(&mut ldap_conn, some_dn, &attrs)
             .await;
         assert!(matches!(
             &result,
@@ -834,7 +837,8 @@ pub mod test {
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let none_dn = "cn=ab012345,ou=Users,dc=test";
-        let none_result = search_one_entry_by_dn(&mut ldap_conn, none_dn).await;
+        let attrs = vec!["*".to_string()];
+        let none_result = search_one_entry_by_dn(&mut ldap_conn, none_dn, &attrs).await;
         debug!("none_result: {:?}", none_result);
         //Err(LdapResult { result: LdapResult { rc: 32, matched: "ou=Users,dc=test", text: "", refs: [], ctrls: [] } })
         assert!(matches!(
@@ -884,7 +888,8 @@ pub mod test {
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
         let dn = "cn=admin,dc=test";
-        let entry = search_one_entry_by_dn(&mut ldap_conn, dn).await.unwrap();
+        let attrs = vec!["*".to_string()];
+        let entry = search_one_entry_by_dn(&mut ldap_conn, dn, &attrs).await.unwrap();
         debug!("entry: {:?}", entry);
         assert_eq!(entry.dn, dn);
     }
@@ -936,20 +941,21 @@ pub mod test {
 
         let some_ex = Regex::new("^(?i)(givenNAME|UserPassword)$").unwrap();
         let some_dn = "cn=xy012345,ou=Users,dc=test";
-        let some_result = search_one_entry_by_dn(&mut ldap_conn, some_dn)
+        let attrs = vec!["*".to_string()];
+        let some_result = search_one_entry_by_dn(&mut ldap_conn, some_dn, &attrs)
             .await
             .unwrap();
-        let mut attrs = some_result.attrs;
-        attrs = filter_attrs(&attrs, &some_ex);
+        let mut result_attrs = some_result.attrs;
+        result_attrs = filter_attrs(&result_attrs, &some_ex);
         debug!("attrs: {:?}", attrs);
-        assert_eq!(attrs.len(), 3);
-        assert!(attrs.contains_key("objectclass"));
-        assert!(attrs.contains_key("cn"));
-        assert!(attrs.contains_key("sn"));
+        assert_eq!(result_attrs.len(), 3);
+        assert!(result_attrs.contains_key("objectclass"));
+        assert!(result_attrs.contains_key("cn"));
+        assert!(result_attrs.contains_key("sn"));
 
         let none_dn = "cn=ab012345,ou=Users,dc=test";
         let none_result =
-            search_one_entry_by_dn(&mut ldap_conn, none_dn).await;
+            search_one_entry_by_dn(&mut ldap_conn, none_dn, &attrs).await;
         assert!(none_result.is_err());
         // TODO what kind of error????
     }
@@ -1016,6 +1022,7 @@ pub mod test {
             &mut ldap_conn,
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
+            "(objectClass=*)",
             &attrs,
             &ex_attrs,
         )
@@ -1068,6 +1075,7 @@ pub mod test {
             &mut ldap_conn,
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
+            "(objectClass=*)",
             &attrs,
             &ex_attrs,
         )
@@ -1130,7 +1138,7 @@ pub mod test {
             .into_iter()
             .collect();
 
-        let norm_dns = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test")
+        let norm_dns = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)")
             .await
             .unwrap();
 
@@ -1166,7 +1174,7 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
-        let result = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test").await;
+        let result = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)").await;
 
         //debug!("result: {:?}", &result);
         //Err(LdapResult { result: LdapResult { rc: 32, matched: "dc=test", text: "", refs: [], ctrls: [] } })

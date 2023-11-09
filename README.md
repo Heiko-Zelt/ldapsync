@@ -67,9 +67,10 @@ Only the following minimal JSON code is needed.
 
 ```
 #!/bin/bash
-export RUST_LOG=debug
-export LS_DAEMON=false
-export LS_DRY_RUN=true
+export RUST_LOG='debug'
+export LS_DAEMON='false'
+export LS_DRY_RUN='true'
+export LS_ATTRS='*'
 export LS_EXCLUDE_ATTRS='^(?i)(authPassword.*|orclPassword|orclAci|orclEntryLevelAci)$'
 export VCAP_SERVICES='{
   "user-provided": [
@@ -124,11 +125,13 @@ cf cups ldap4 -p "url, base_dn, bind_dn, password"
 
 ```
 #!/bin/bash
-export RUST_LOG=debug
-export LS_DAEMON=true
-export LS_JOB_SLEEP=15 min
-export LS_DRY_RUN=false
-export VCAP_SERVICES="export VCAP_SERVICES='{
+export RUST_LOG='debug'
+export LS_DAEMON='true'
+export LS_JOB_SLEEP='15 min'
+export LS_DRY_RUN='false'
+export LS_FILTER='(objectClass=person)'
+export LS_ATTRS='*'
+export VCAP_SERVICES='{
   "user-provided": [
     {
       "name": "hub1",
@@ -188,7 +191,8 @@ export LS_SYNCHRONIZATIONS="[
 | LS_DAEMON   | yes       | "true" to synchronize continiously or "false" to run only once.                                                           |
 | LS_SLEEP    | no        | Time to sleep between runs, if in daemon mode. Examples "10 sec" or "15 min".                                             |
 | LS_DRY_RUN  | yes       | "true" to only log what would be changed, "false" to actually modify content of target directory.                         |
-| ATTRS       | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
+| LS_FILTER   | no        | example: "(objectClass=person)", default value is "(objectClass=*)"                                                       |
+| LS_ATTRS    | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
 | LS_EXCLUDE_ATTRS | no   | Regular expression for attribute names to be ignored.                                                                     |
 | RUST_LOG    | no        | Log-Level: "trace", "debug", "info", "warn", "error" or "off", see: https://docs.rs/env_logger/latest/env_logger/         |
 

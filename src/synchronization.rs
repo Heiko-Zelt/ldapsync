@@ -52,6 +52,7 @@ pub struct Synchronization<'a> {
     /// map: name -> LdapService
     pub ldap_services: &'a HashMap<String, LdapService>,
     pub sync_config: &'a SynchronizationConfig,
+    pub filter: &'a String,
     pub attrs: &'a Vec<String>,
     pub exclude_attrs: &'a Option<Regex>,
     pub dry_run: bool,
@@ -84,6 +85,7 @@ impl<'a> Synchronization<'a> {
                 &source_service.base_dn,
                 &target_service.base_dn,
                 dn,
+                self.filter,
                 self.dry_run,
             )
             .await?;
@@ -94,6 +96,7 @@ impl<'a> Synchronization<'a> {
                 &target_service.base_dn,
                 &dn,
                 &sync_ldap_timestamp,
+                self.filter,
                 self.attrs,
                 self.exclude_attrs,
                 self.dry_run,
@@ -179,12 +182,13 @@ impl<'a> Synchronization<'a> {
         source_base_dn: &str,
         target_base_dn: &str,
         sync_dn: &str,
+        filter: &str,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
         info!(r#"sync_delete: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}")"#, source_base_dn, target_base_dn, sync_dn);
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
-        let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn).await?;
+        let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn, filter).await?;
         
         debug!("sync_delete: target DNs:");
         // TODO nur ausführen, wenn log level debug
@@ -195,7 +199,7 @@ impl<'a> Synchronization<'a> {
             Ok(0)
         } else {
             let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
-            let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn).await?;
+            let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn, filter).await?;
             debug!("sync_delete: source DNs:");
             // TODO nur ausführen, wenn log level debug
             log_debug_dns("sync_delete:", &source_norm_dns);
@@ -246,6 +250,7 @@ impl<'a> Synchronization<'a> {
         target_base_dn: &str,
         sync_dn: &str,
         old_modify_timestamp: &Option<String>,
+        filter: &str,
         attrs: &Vec<String>,
         exclude_attrs: &Option<Regex>,
         dry_run: bool,
@@ -261,6 +266,7 @@ impl<'a> Synchronization<'a> {
             source_ldap,
             &source_sync_dn,
             old_modify_timestamp,
+            filter,
             attrs,
             exclude_attrs,
         )
@@ -283,6 +289,7 @@ impl<'a> Synchronization<'a> {
                 source_base_dn_len,
                 target_base_dn,
                 source_search_entry,
+                attrs,
                 exclude_attrs,
                 dry_run,
             )
@@ -301,6 +308,7 @@ impl<'a> Synchronization<'a> {
         source_base_dn_len: usize,
         target_base_dn: &str,
         source_search_entry: SearchEntry,
+        attrs: &Vec<String>,
         exclude_attrs: &Option<Regex>,
         dry_run: bool,
     ) -> Result<ModiOne, LdapError> {
@@ -314,7 +322,7 @@ impl<'a> Synchronization<'a> {
         let target_dn = join_2_dns(&trunc_dn, target_base_dn);
         
         let target_search_result = 
-            search_one_entry_by_dn(target_ldap, &target_dn).await;
+            search_one_entry_by_dn(target_ldap, &target_dn, attrs).await;
 
         match target_search_result {
             Ok(mut entry) => {
@@ -513,6 +521,7 @@ mod test {
             &target_base_dn,
             "ou=Users",
             &Some(old_modify_timestamp),
+            "(objectClass=*)",
             &vec!["*".to_string()],
             &Some(Regex::new("^givenname$").unwrap()),
             true,
@@ -692,6 +701,7 @@ mod test {
             &source_base_dn,
             &target_base_dn,
             "ou=Users",
+            "(objectClass=*)",
             false,
         )
         .await.unwrap();
@@ -802,6 +812,7 @@ mod test {
             &source_base_dn,
             &target_base_dn,
             "o=de,ou=Users",
+            "(objectClass=*)",
             false,
         )
         .await;
@@ -1175,6 +1186,7 @@ mod test {
         let synchronization = Synchronization {
             ldap_services: &ldap_services,
             sync_config: &sync_config,
+            filter: &"(objectClass=*)".to_string(),
             attrs: &vec!["*".to_string()],
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
             dry_run: false,

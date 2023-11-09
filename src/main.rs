@@ -17,7 +17,6 @@ use log::{error, info};
 use env_logger::{Builder, Target};
 use tokio::time::sleep;
 use std::collections::HashMap;
-use std::env;
 
 /// main function.
 /// reads configuration from environment variables.
@@ -87,6 +86,7 @@ async fn lets_go(app_config: &AppConfig) {
             ldap_services: &app_config.ldap_services,
             sync_config: sync_config,
             dry_run: app_config.dry_run,
+            filter: &app_config.filter,
             attrs: &attrs_vec,
             exclude_attrs: &app_config.exclude_attrs,
         })

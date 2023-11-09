@@ -11,6 +11,9 @@ use std::{env, env::VarError, str::FromStr, time::Duration};
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
 pub const SYNCHRONIZATIONS: &str = "LS_SYNCHRONIZATIONS";
 pub const DAEMON: &str = "LS_DAEMON";
+
+/// default is "(objectClass=*)"
+pub const FILTER: &str = "LS_FILTER";
 pub const ATTRS: &str = "LS_ATTRS";
 pub const EXCLUDE_ATTRS: &str = "LS_EXCLUDE_ATTRS";
 pub const JOB_SLEEP: &str = "LS_SLEEP";
@@ -83,6 +86,7 @@ pub struct AppConfig {
     pub daemon: bool,
     pub job_sleep: Option<Duration>,
     pub dry_run: bool,
+    pub filter: String,
     pub attrs: HashSet<String>,
     pub exclude_attrs: Option<Regex>,
     pub ldap_services: HashMap<String, LdapService>,
@@ -109,6 +113,7 @@ impl AppConfig {
             VCAP_SERVICES,
             SYNCHRONIZATIONS,
             DAEMON,
+            FILTER,
             ATTRS,
             EXCLUDE_ATTRS,
             JOB_SLEEP,
@@ -225,6 +230,18 @@ impl AppConfig {
         }
     }
 
+    /// TODO: Check syntax. Possibly return Err().
+    fn parse_filter(filter_str: &Option<&String>) -> Result<String, AppConfigError> {
+        match filter_str {
+            Some(s) => {
+                Ok(s.to_string())
+            }
+            None => {
+                Ok("(objectclass=*)".to_string())
+            }
+        }
+    }
+
     /// LS_ATTRS is a required parameter, without default value to make it clear, what is searched for.
     /// Parses a comma-separarated liste of attribute names.
     /// Attribute names are "*", "+" or a real attribute name, containing lower- and uppercase letters, digits and semicolons.
@@ -285,12 +302,14 @@ impl AppConfig {
         let job_sleep_duration = Self::parse_sleep(&param_map.get(JOB_SLEEP))?;
         let daemon_bool = Self::parse_daemon(&param_map.get(DAEMON))?;
         let dry_run_bool = Self::parse_dry_run(&param_map.get(DRY_RUN))?;
+        let filter_string = Self::parse_filter(&param_map.get(FILTER))?;
         let attrs_set = Self::parse_attrs(&param_map.get(ATTRS))?;
         let exclude_attrs_pattern = Self::parse_exclude_attrs(&param_map.get(EXCLUDE_ATTRS))?;
         let config = AppConfig {
             daemon: daemon_bool,
             job_sleep: job_sleep_duration,
             dry_run: dry_run_bool,
+            filter: filter_string,
             attrs: attrs_set,
             exclude_attrs: exclude_attrs_pattern,
             ldap_services: ldap_services_map,
