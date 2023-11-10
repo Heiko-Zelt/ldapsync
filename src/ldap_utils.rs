@@ -1,4 +1,4 @@
-use crate::rewrite_engine::{Rule, Action};
+use crate::rewrite_engine::Rule;
 use crate::cf_services::LdapService;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
@@ -382,6 +382,7 @@ pub fn diff_attributes(
 pub mod test {
     use super::*;
     use crate::ldap_result_codes::*;
+    use crate::rewrite_engine::Action;
     use crate::ldif::*;
     use indoc::*;
     use ldap3::{LdapError, LdapResult};
