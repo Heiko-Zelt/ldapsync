@@ -8,6 +8,7 @@ use crate::cf_services::LdapService;
 use crate::ldap_utils::*;
 use crate::ldap_result_codes::*;
 use crate::synchronization_config::SynchronizationConfig;
+use crate::rewrite_engine::Rule;
 
 /// The object class "extensibleObject" is defined in OpenLdap core schema.
 /// So there is no need to extend the schema with an own object class.
@@ -56,6 +57,7 @@ pub struct Synchronization<'a> {
     pub exclude_dns: &'a Option<Regex>,
     pub attrs: &'a Vec<String>,
     pub exclude_attrs: &'a Option<Regex>,
+    pub rewrite_rules: &'a Vec<Rule>,
     pub dry_run: bool,
 }
 
@@ -103,6 +105,7 @@ impl<'a> Synchronization<'a> {
                 self.exclude_dns,
                 self.attrs,
                 self.exclude_attrs,
+                self.rewrite_rules,
                 self.dry_run,
             )
             .await?;
@@ -113,62 +116,6 @@ impl<'a> Synchronization<'a> {
 
         Ok(sync_statistics)
     }
-
-    /// return type Option<LdapError> would be good enough
-    /* 
-    pub async fn save_sync_timestamp(
-        &self,
-        ldap: &mut Ldap,
-        sync_timestamp: &str,
-    ) -> Result<LdapResult, LdapError> {
-        debug!(r#"save_sync_timestamp: saving sync timestamp: "{}")"#, sync_timestamp);
-        let new_values = HashSet::from([sync_timestamp]);
-        let modi = Mod::Replace(SYNC_TIMESTAMP_ATTR_NAME, new_values);
-        let mods = vec![modi];
-        let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
-        let dn = join_2_dns(&self.sync_config.ts_dn, &ts_store_service.base_dn);
-        let result = ldap.modify(&dn, mods).await;
-        debug!(r#"save_sync_timestamp: result: "{:?}")"#, result);
-
-        match result {
-            Ok(LdapResult { rc: 0, ..}) => result,
-            Err(err) => Err(err),
-            _ => Err(LdapError::LdapResult { result: result.unwrap() }) // Ok with rc != 0 is an error too
-        }
-    }
-    */
-
-    /// adding extensibleClass allows the addition of any attribute to an entry
-    /// objectclass ( 1.3.6.1.4.1.1466.101.120.111 NAME 'extensibleObject'
-    /// DESC 'RFC2252: extensible object' SUP top AUXILIARY )
-    /*
-    pub async fn load_sync_timestamp(&self, ldap: &mut Ldap) -> Result<String, LdapError> {
-        let ts_store_service = self.ldap_services.get(&self.sync_config.ts_store).unwrap();
-        let ts_store_service_base_dn = &ts_store_service.base_dn;
-        let dn = join_2_dns(&self.sync_config.ts_dn, ts_store_service_base_dn);
-        debug!(r#"load_sync_timestamp: loading sync timestamp from dn: "{}""#, dn);
-        let search_result = ldap
-            .search(
-                &dn,
-                Scope::Base,
-                &format!("(objectClass=*)"),
-                vec![SYNC_TIMESTAMP_ATTR_NAME],
-            )
-            .await?.success()?;
-
-        let result_entries = search_result.0;
-        // TODO pruefen: sollte genau 1 sein
-        debug!("load_sync_timestamp: found number of entries: {}", result_entries.len());
-        let result_entry = result_entries[0].clone();
-        let search_entry = SearchEntry::construct(result_entry);
-        //debug!("load_sync_timestamp: entry: {:?}", search_entry);
-        // TODO check if there is exact one value
-        let sync_timestamp_attr = search_entry.attrs.get(SYNC_TIMESTAMP_ATTR_NAME).unwrap(); // TODO: panic oder Fehler zurückgeben?
-        let sync_timestamp_value = sync_timestamp_attr[0].clone();
-        debug!("timestamp: {}", sync_timestamp_value);
-        Ok(sync_timestamp_value)
-    }
-    */
 
     /// Löscht alle Einträge, die im Ziel-LDAP vorhanden sind aber nicht im Quell-LDAP.
     /// Es werden zuerst hirarchich untergeordnete Einträge gelöscht, dann übergeordnete.
@@ -259,6 +206,7 @@ impl<'a> Synchronization<'a> {
         exclude_dns: &Option<Regex>,
         attrs: &Vec<String>,
         exclude_attrs: &Option<Regex>,
+        rewrite_rules: &Vec<Rule>,
         dry_run: bool,
     ) -> Result<ModiStatistics, LdapError> {
         debug!(
@@ -269,7 +217,7 @@ impl<'a> Synchronization<'a> {
         let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
         let target_sync_dn = join_2_dns(&sync_dn, &source_base_dn);
 
-        let mut source_search_entries = search_modified_entries_attrs_filtered(
+        let mut source_search_entries = search_modified_entries_and_rewrite(
             source_ldap,
             &source_sync_dn,
             old_modify_timestamp,
@@ -277,6 +225,7 @@ impl<'a> Synchronization<'a> {
             exclude_dns,
             attrs,
             exclude_attrs,
+            rewrite_rules,
         )
         .await?;
 
@@ -530,6 +479,7 @@ mod test {
             &None,
             &vec!["*".to_string()],
             &Some(Regex::new("^givenname$").unwrap()),
+            &Vec::new(),
             true,
         )
         .await.unwrap();
@@ -830,178 +780,6 @@ mod test {
 
     }    
 
-    /*
-    #[tokio::test]
-    async fn test_load_sync_timestamp() {
-        let _ = env_logger::try_init();
-
-        let ts_store_name = "ldap1".to_string();
-        let ts_store_plain_port = next_port();
-        let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
-        let ts_store_bind_dn = "cn=admin,dc=test".to_string();
-        let ts_store_password = "secret".to_string();
-        let ts_store_base_dn = "dc=test".to_string();
-        let ts_store_content = indoc! { "
-            dn: dc=test
-            objectclass: dcObject
-            objectclass: organization
-            o: Test Org
-            dc: test
-
-            dn: cn=admin,dc=test
-            objectClass: inetOrgPerson
-            cn: admin
-            sn: Admin
-            userPassword: secret
-
-            dn: o=sync_timestamps,dc=test
-            objectClass: top
-            objectClass: organization
-            o: sync_timestamps
-
-            dn: o=provider-consumer,o=sync_timestamps,dc=test
-            objectClass: top
-            objectClass: organization
-            objectClass: extensibleObject
-            o: provider-consumer
-            name: 20231025235959Z
-
-            dn: ou=Users,dc=test
-            objectClass: top
-            objectClass: organizationalUnit
-            ou: Users"
-        };
-
-        let _ts_store_server = start_test_server(
-            ts_store_plain_port,
-            &ts_store_base_dn,
-            ts_store_content,
-        )
-        .await;
-
-        let ts_store_service = LdapService {
-            url: ts_store_url,
-            bind_dn: ts_store_bind_dn,
-            password: ts_store_password,
-            base_dn: ts_store_base_dn.clone(),
-        };
-
-        let ldap_services_map = HashMap::from([(ts_store_name.clone(), ts_store_service)]);
-
-        let sync_config = SynchronizationConfig {
-            source: "provider".to_string(),
-            target: "consumer".to_string(),
-            base_dns: vec!["cn=unused".to_string()]
-        };
-
-        let synchronisation = Synchronization {
-            ldap_services: &ldap_services_map,
-            sync_config: &sync_config,
-            dry_run: true,
-            exclude_attrs: &Regex::new("").unwrap(),
-        };
-
-        let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();
-        debug!("use service: {:?}", &service_to_use);
-        let mut ts_store_ldap = simple_connect(service_to_use).await.unwrap();
-
-        debug!("ts_store_ldap: {:?}", ts_store_ldap);
-        let result = synchronisation
-            .load_sync_timestamp(&mut ts_store_ldap)
-            .await
-            .unwrap();
-
-        assert_eq!(result, "20231025235959Z");
-    }
-    */
-
-    /*
-    #[tokio::test]
-    async fn test_save_sync_timestamp() {
-        let _ = env_logger::try_init();
-
-        let sync_timestamp = "20231025235959Z";
-        let ts_store_name = "ldap1".to_string();
-        let ts_store_plain_port = next_port();
-        let ts_store_url = format!("ldap://127.0.0.1:{}", ts_store_plain_port);
-        let ts_store_bind_dn = "cn=admin,dc=test".to_string();
-        let ts_store_password = "secret".to_string();
-        let ts_store_base_dn = "dc=test".to_string();
-        let ts_store_content = indoc! { "
-            dn: dc=test
-            objectclass: dcObject
-            objectclass: organization
-            o: Test Org
-            dc: test
-
-            dn: cn=admin,dc=test
-            objectClass: inetOrgPerson
-            cn: admin
-            sn: Admin
-            userPassword: secret
-
-            dn: o=sync_timestamps,dc=test
-            objectClass: top
-            objectClass: organization
-            o: sync_timestamps
-
-            dn: o=provider-consumer,o=sync_timestamps,dc=test
-            objectClass: top
-            objectClass: organization
-            objectClass: extensibleObject
-            o: provider-consumer
-            name: 19750101235959Z
-
-            dn: ou=Users,dc=test
-            objectClass: top
-            objectClass: organizationalUnit
-            ou: Users"
-        };
-
-        let _ts_store_server = start_test_server(
-            ts_store_plain_port,
-            &ts_store_base_dn,
-            ts_store_content,
-        )
-        .await;
-
-        let ts_store_service = LdapService {
-            url: ts_store_url,
-            bind_dn: ts_store_bind_dn,
-            password: ts_store_password,
-            base_dn: ts_store_base_dn.clone(),
-        };
-
-        let ldap_services_map = HashMap::from([(ts_store_name.clone(), ts_store_service)]);
-
-        let sync_config = SynchronizationConfig {
-            source: "provider".to_string(),
-            target: "consumer".to_string(),
-            base_dns: vec!["cn=unused".to_string()],
-            ts_store: ts_store_name.clone(),
-            /// ts_base_dn is relative to the base_dn of the LdapService
-            ts_dn: "o=provider-consumer,o=sync_timestamps".to_string(),
-        };
-
-        let synchronisation = Synchronization {
-            ldap_services: &ldap_services_map,
-            sync_config: &sync_config,
-            dry_run: false,
-            exclude_attrs: &Regex::new("").unwrap(),
-        };
-
-        let service_to_use = ldap_services_map.get(&ts_store_name).unwrap();
-        debug!("use service: {:?}", &service_to_use);
-        let mut ts_store_ldap = simple_connect(service_to_use).await.unwrap();
-        
-        let result = synchronisation
-            .save_sync_timestamp(&mut ts_store_ldap, sync_timestamp)
-            .await;
-        debug!("result: {:?}", result);
-        assert!(result.is_ok());
-    }
-    */
-
     #[tokio::test]
     async fn test_synchronisation() {
         let _ = env_logger::try_init();
@@ -1198,6 +976,7 @@ mod test {
             exclude_dns: &None,
             attrs: &vec!["*".to_string()],
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
+            rewrite_rules: &Vec::new(),
             dry_run: false,
         };
         let date_time = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
@@ -1444,6 +1223,7 @@ mod test {
             exclude_dns: &Some(Regex::new("(?i)o=local$").unwrap()),
             attrs: &vec!["*".to_string()],
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
+            rewrite_rules: &Vec::new(),
             dry_run: false,
         };
         let date_time = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();

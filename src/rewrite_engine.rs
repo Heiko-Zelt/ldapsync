@@ -1,6 +1,7 @@
 //use regex::Regex;
 use ldap3::SearchEntry;
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 
 /// A rule consists of an optional condition and a list of actions, which will be executed.
 /// Only text attributes can be manipulated.
@@ -13,7 +14,7 @@ pub struct Rule {
     //single_value(attr), multi_value(attr), present(attr)
     //number_of_values(attr, compare, number) with compare "=", "<", ">", "<=", ">=", "!="
     //length(attr, compare, number) only for single value attributes
-    actions: Vec<Action>,
+    pub actions: Vec<Action>,
 }
 
 /// attr is the attribute name and must be given in lowercase
@@ -30,6 +31,9 @@ pub enum Action {
 
     /// clears all values of an attribute = remove the attribute completely
     Clear { attr: String },
+
+    /// clears all attributes which's names match the regular expression
+    //Clears { regex: Regex }, ??? how to deserialize and compare Regex???
 
     /// only for single values: concatenate value of 2nd attr to 1st one
     Append { attr: String, attr2: String },

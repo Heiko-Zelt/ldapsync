@@ -6,6 +6,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::{env, env::VarError, str::FromStr, time::Duration};
+use crate::rewrite_engine::Rule;
 
 /// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
@@ -17,6 +18,7 @@ pub const FILTER: &str = "LS_FILTER";
 pub const EXCLUDE_DNS: &str = "LS_EXCLUDE_DNS";
 pub const ATTRS: &str = "LS_ATTRS";
 pub const EXCLUDE_ATTRS: &str = "LS_EXCLUDE_ATTRS";
+pub const REWRITE: &str = "LS_REWRITE";
 pub const JOB_SLEEP: &str = "LS_SLEEP";
 pub const DRY_RUN: &str = "LS_DRY_RUN";
 
@@ -91,6 +93,8 @@ pub struct AppConfig {
     pub exclude_dns: Option<Regex>,
     pub attrs: HashSet<String>,
     pub exclude_attrs: Option<Regex>,
+    /// is optional, empty Vec is same as None
+    pub rewrite_rules: Vec<Rule>,
     pub ldap_services: HashMap<String, LdapService>,
     pub synchronization_configs: Vec<SynchronizationConfig>,
 }
@@ -119,6 +123,7 @@ impl AppConfig {
             EXCLUDE_DNS,
             ATTRS,
             EXCLUDE_ATTRS,
+            REWRITE,
             JOB_SLEEP,
             DRY_RUN,
         ];
@@ -126,8 +131,11 @@ impl AppConfig {
             match env::var(name) {
                 Ok(v) => {
                     env_map.insert(name, v);
+                    info!("reading env var: {}", name)
                 }
-                Err(VarError::NotPresent) => {}
+                Err(VarError::NotPresent) => {
+                    debug!("not present: {}", name)
+                }
                 Err(err) => {
                     return Err(AppConfigError::EnvVarError {
                         env_var_name: name.to_string(),
@@ -185,6 +193,25 @@ impl AppConfig {
             }),
         }
     }
+
+    fn parse_rewrite(
+        json_str: &Option<&String>,
+    ) -> Result<Vec<Rule>, AppConfigError> {
+        match json_str {
+            Some(s) => {
+                debug!("{}: {}", REWRITE, s);
+                Ok(
+                    Rule::parse_rules(&s).map_err(|err| {
+                        AppConfigError::EnvVarParseJsonError {
+                            env_var_name: REWRITE.to_string(),
+                            cause: err,
+                        }
+                    })?,
+                )
+            }
+            None => Ok(Vec::new()),
+        }
+    }    
 
     fn parse_vcap_services(
         json_str: &Option<&String>,
@@ -326,6 +353,7 @@ impl AppConfig {
         let exclude_dns_regex = Self::parse_exclude_dns(&param_map.get(EXCLUDE_DNS))?;
         let attrs_set = Self::parse_attrs(&param_map.get(ATTRS))?;
         let exclude_attrs_regex = Self::parse_exclude_attrs(&param_map.get(EXCLUDE_ATTRS))?;
+        let rewrite_vec = Self::parse_rewrite(&param_map.get(REWRITE))?;
         let config = AppConfig {
             daemon: daemon_bool,
             job_sleep: job_sleep_duration,
@@ -334,6 +362,7 @@ impl AppConfig {
             exclude_dns: exclude_dns_regex,
             attrs: attrs_set,
             exclude_attrs: exclude_attrs_regex,
+            rewrite_rules: rewrite_vec,
             ldap_services: ldap_services_map,
             synchronization_configs: synchronizations_vec,
         };

@@ -24,11 +24,7 @@ use std::collections::HashMap;
 /// If the configuration is ok, start the actual main function lets_go().
 #[tokio::main]
 async fn main() {
-    let mut builder = Builder::from_default_env();
-    builder.target(Target::Stdout);
-    builder.init();
-    //init_rust_log();
-    //env_logger::init();
+    init_rust_log();
 
     info!("{}", "ldapsync main()");
     AppConfig::log_platform_info();
@@ -46,20 +42,12 @@ async fn main() {
 
 /// write to stdout instead of stderr.
 /// because cf (Cloud Foundry Command Line Interface) shows messages on stdterr in red, on stdout in white.
-/*
 fn init_rust_log() {
-    let mut builder = Builder::new();
+    let mut builder = Builder::from_default_env();
     builder.target(Target::Stdout);
-    let rust_log = env::var("RUST_LOG");
-    match rust_log {
-        Ok(rl) => {
-            builder.parse_env(rl);
-            builder.init();
-        },
-        Err(_) => { println!(r#"Warning: The Environment variable RUST_LOG is not set."#)}
-    }
+    builder.init();
+    //env_logger::init();
 }
- */
 
 /// after environment variables have been read
 async fn params_read(params_map: &HashMap<&str, String>) {
@@ -73,7 +61,6 @@ async fn params_read(params_map: &HashMap<&str, String>) {
         }
     }
 }
-
 
 /// Actual main function, after configuration has been read and verified.
 /// Initializes 2 more variables and
@@ -91,6 +78,7 @@ async fn lets_go(app_config: &AppConfig) {
             exclude_dns: &app_config.exclude_dns,
             attrs: &attrs_vec,
             exclude_attrs: &app_config.exclude_attrs,
+            rewrite_rules: &app_config.rewrite_rules,
         })
         .collect();
 

@@ -1,3 +1,4 @@
+use crate::rewrite_engine::{Rule, Action};
 use crate::cf_services::LdapService;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
@@ -282,7 +283,7 @@ pub async fn search_one_entry_by_dn_attrs_filtered(
 /// DNs are normalized and Entries are filtered.
 /// Attribute names are normalized to lowercase.
 /// Attributes are filtered.
-pub async fn search_modified_entries_attrs_filtered(
+pub async fn search_modified_entries_and_rewrite(
     ldap: &mut Ldap,
     base_dn: &str,
     old_modify_timestamp: &Option<String>,
@@ -290,6 +291,7 @@ pub async fn search_modified_entries_attrs_filtered(
     exclude_dns: &Option<Regex>,
     attrs: &Vec<String>,
     exclude_attrs: &Option<Regex>,
+    rewrite_rules: &Vec<Rule>
 ) -> Result<Vec<SearchEntry>, LdapError> {
     let base_dn_len = base_dn.len();
     let complete_filter = match old_modify_timestamp {
@@ -325,6 +327,7 @@ pub async fn search_modified_entries_attrs_filtered(
                     Some(ex) => search_entry.attrs = filter_attrs(&search_entry.attrs, ex),
                     None => {}
                 }
+                Rule::apply_rules(&mut search_entry, &rewrite_rules); // can replace filter_attrs(exclude_attrs)
                 search_entries.push(search_entry);
             }
             None => {
@@ -1050,7 +1053,7 @@ pub mod test {
         })
         .unwrap();
 
-        let search_entries = search_modified_entries_attrs_filtered(
+        let search_entries = search_modified_entries_and_rewrite(
             &mut ldap_conn,
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
@@ -1058,6 +1061,93 @@ pub mod test {
             &None,
             &attrs,
             &ex_attrs,
+            &Vec::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_vec_search_entries_eq(&search_entries, &expected_search_entries);
+
+        assert_eq!(search_entries.len(), 1);
+        let attrs = &search_entries[0].attrs;
+        debug!("attrs: {:?}", attrs);
+        assert_eq!(attrs.len(), 3);
+        assert!(attrs.contains_key("objectclass"));
+        assert!(attrs.contains_key("givenname"));
+        assert!(attrs.contains_key("userpassword"));
+    }
+
+    #[tokio::test]
+    async fn test_search_modified_entries_and_rewrite() {
+        let _ = env_logger::try_init();
+        let plain_port = next_port();
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 19750101235958Z
+        
+            dn: cn=old012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: old012345
+            sn: Müller
+            modifyTimestamp: 19750101235959Z
+            
+            dn: cn=new012345,ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: new012345
+            sn: Habibullah
+            givenName: Amira
+            userPassword: welt123!
+            modifyTimestamp: 20220101235959Z"
+        };
+        let service = LdapService {
+            url: url,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
+            base_dn: base_dn.clone(),
+        };
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+        let attrs = vec!["*".to_string()];
+        let rewrite_rules = vec![Rule { actions: vec![
+            Action::Clear { attr: "cn".to_string() },
+            Action::Clear { attr: "sn".to_string() },
+            Action::Clear { attr: "orclpassword".to_string() },
+         ]}];
+        let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
+            dn: cn=new012345
+            objectclass: inetOrgPerson
+            givenname: Amira
+            userpassword: welt123!"
+        })
+        .unwrap();
+
+        let search_entries = search_modified_entries_and_rewrite(
+            &mut ldap_conn,
+            "ou=Users,dc=test",
+            &Some("20201231235959Z".to_string()),
+            "(objectClass=*)",
+            &None,
+            &attrs,
+            &None,
+            &rewrite_rules,
         )
         .await
         .unwrap();
@@ -1104,7 +1194,7 @@ pub mod test {
         let attrs = vec!["*".to_string()];
         let ex_attrs = Some(Regex::new("^(?i)(cn|SN|orclPassword)$").unwrap());
 
-        let failed_result = search_modified_entries_attrs_filtered(
+        let failed_result = search_modified_entries_and_rewrite(
             &mut ldap_conn,
             "ou=Users,dc=test",
             &Some("20201231235959Z".to_string()),
@@ -1112,6 +1202,7 @@ pub mod test {
             &None,
             &attrs,
             &ex_attrs,
+            &Vec::new(),
         )
         .await;
 

@@ -195,6 +195,7 @@ export LS_SYNCHRONIZATIONS="[
 | LS_EXCLUDE_DNS | no        | example: "(?i),cn=local$", regular expression to filter DNs. DNs are relative to the Base-DN, of the Synchronization. *)  |
 | LS_ATTRS       | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
 | LS_EXCLUDE_ATTRS | no      | Regular expression for attribute names to be ignored.                                                                     |
+| LS_REWRITE     | no        | Change attributes and values of entries in general or based on conditions. [{"actions": [{"Clear": {"attr": "street"}}]}] |
 | RUST_LOG       | no        | Log-Level: "trace", "debug", "info", "warn", "error" or "off", see: https://docs.rs/env_logger/latest/env_logger/         |
 
 *) Not all LDAP-Server support filtering DNs by substrings. This filter works on the client side. The regular expression should ignore case.
