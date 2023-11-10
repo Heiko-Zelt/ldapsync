@@ -1,19 +1,20 @@
-//use regex::Regex;
 use ldap3::SearchEntry;
 use serde::{Deserialize, Serialize};
-use regex::Regex;
+//TODO use regex::Regex; 
 
 /// A rule consists of an optional condition and a list of actions, which will be executed.
 /// Only text attributes can be manipulated.
 /// Maybe add support for jpegImage manipulation, etc. later.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Rule {
-    //condition: Option<Condition>,  TODO booolean expressions
-    //and(a, b), not(a), or(a, b), xor(a, b)
-    //matches(attr, regex),
-    //single_value(attr), multi_value(attr), present(attr)
-    //number_of_values(attr, compare, number) with compare "=", "<", ">", "<=", ">=", "!="
-    //length(attr, compare, number) only for single value attributes
+    // TODO add condition
+    //condition: Option<Condition>,
+    //is predicate / returns boolean
+    // - and(a, b), not(a), or(a, b), xor(a, b)
+    // - contains(attr, value_regex),
+    // - single_value(attr), multi_value(attr), present(attr), absent(attr)
+    // - number_of_values(attr, compare, number) with compare "=", "<", ">", "<=", ">=", "!="
+    // - length(attr, compare, number) only for single value attributes
     pub actions: Vec<Action>,
 }
 
