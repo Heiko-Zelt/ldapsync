@@ -113,6 +113,9 @@ impl<'a> Synchronization<'a> {
             sync_statistics.added += modi_statistics.added;
             sync_statistics.attrs_modified += modi_statistics.attrs_modified;
         }
+        debug!("unbind(). Terminating the connections.");
+        source_ldap.unbind().await?;
+        target_ldap.unbind().await?;
 
         Ok(sync_statistics)
     }

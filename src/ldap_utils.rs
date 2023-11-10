@@ -132,6 +132,7 @@ pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
 
 
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
+    debug!(r#"connecting using URL: "{}""#, &service.url);
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
     // returns type ldap3::result::Result<(LdapConnAsync, Ldap)>
     // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<(LdapConnAsync, Ldap), LdapError>
@@ -140,8 +141,9 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
 
     match service {
         LdapService { bind_dn: Some(bdn), password: Some(pw), ..} => {
+            debug!(r#"binding using DN: "{}""#, &bdn);
             let _ldap_result = ldap
-            .simple_bind(bdn, pw)
+            .simple_bind(&bdn, &pw)
             .await?
             .success()?;
         },

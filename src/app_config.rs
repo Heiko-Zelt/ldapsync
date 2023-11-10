@@ -105,10 +105,10 @@ impl AppConfig {
         match read_result {
             Ok(content) => {
                 for line in content.lines() {
-                    info!("log_plattform_info: {}", line);
+                    debug!("log_plattform_info: {}", line);
                 }
             }
-            Err(err) => info!("Cannot read /etc/os-release. {:?}", err),
+            Err(err) => debug!("Cannot read /etc/os-release. {:?}", err),
         }
     }
 
