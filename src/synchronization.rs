@@ -70,6 +70,7 @@ impl<'a> Synchronization<'a> {
     /// returns: number of touched (added, modified and delted) entries)
     /// TODO: Wenn zu synchronisierender Base-DN im Ziel nicht existiert, dann Eintrag anlegen (statt RC 32 no such object ausgeben).
     pub async fn synchronize(&self, old_sync_datetime: Option<DateTime<Utc>>) -> Result<SyncStatistics, LdapError> {
+        info!(r#"synchronize: source: "{}" --> target: "{}""#, &self.sync_config.source, &self.sync_config.target);
         let source_service = self.ldap_services.get(&self.sync_config.source).unwrap();
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
 
