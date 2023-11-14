@@ -184,21 +184,25 @@ export LS_SYNCHRONIZATIONS="[
 
 ## Environment Variables
 
-| Name           | Mandatory | Meaning                                                                                                                   |
-| -------------- | --------- | ------------------------------------------------------------------------------------------------------------------------- |
-| VCAP_SERVICES  | yes     | Data to connect to LDAP servers (in typical Cloud Foundry syntax). Only simple authentication with username and password is supported. |
-| LS_SYNCHRONIZATIONS | yes | Service names of source and target directory, like defined in VCAP_SERVICES and subtree(s) wich should be synchronized. |
-| LS_DAEMON      | yes       | "true" to synchronize continiously or "false" to run only once.                                                           |
-| LS_SLEEP       | no        | Time to sleep between runs, if in daemon mode. Examples "10 sec" or "15 min".                                             |
-| LS_DRY_RUN     | yes       | "true" to only log what would be changed, "false" to actually modify content of target directory.                         |
-| LS_FILTER      | no        | example: "(objectClass=person)", default value is "(objectClass=*)"                                                       |
-| LS_EXCLUDE_DNS | no        | example: "(?i),cn=local$", regular expression to filter DNs. DNs are relative to the Base-DN, of the Synchronization. *)  |
-| LS_ATTRS       | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
-| LS_EXCLUDE_ATTRS | no      | Regular expression for attribute names to be ignored.                                                                     |
-| LS_REWRITE     | no        | Change attributes and values of entries in general or based on conditions. [{"actions": [{"Clear": {"attr": "street"}}]}] |
-| RUST_LOG       | no        | Log-Level: "trace", "debug", "info", "warn", "error" or "off", see: https://docs.rs/env_logger/latest/env_logger/         |
+| Name               | Mandatory | Meaning                                                                                                                   |
+| ---                | ---       | ---                                                                                                                       |
+| VCAP_SERVICES *1)  | yes       | Data to connect to LDAP servers (in typical Cloud Foundry syntax). Only simple authentication is supported.               |
+| LS_SYNCHRONIZATIONS *2) | yes  | Service names of source and target directory, like defined in VCAP_SERVICES and subtree(s) wich should be synchronized.   |
+| LS_DAEMON          | yes       | "true" to synchronize continiously or "false" to run only once.                                                           |
+| LS_SLEEP           | no        | Time to sleep between runs, if in daemon mode. Examples "10 sec" or "15 min".                                             |
+| LS_DRY_RUN         | yes       | "true" to only log what would be changed, "false" to actually modify content of target directory.                         |
+| LS_FILTER          | no        | example: "(objectClass=person)", default value is "(objectClass=*)"                                                       |
+| LS_EXCLUDE_DNS *2) | no        | example: "(?i),cn=local$", regular expression to filter DNs. DNs are relative to the Base-DN, of the Synchronization.     |
+| LS_ATTRS       *3) | yes       | whitespace-separated list of attribute names, may contain "*" and/or "+", example: "cn sn givenName"                      |
+| LS_EXCLUDE_ATTRS   | no        | Regular expression for attribute names to be ignored.                                                                     |
+| LS_REWRITE         | no        | Change attributes and values of entries in general or based on conditions. [{"actions": [{"Clear": {"attr": "street"}}]}] |
+| RUST_LOG           | no        | Log-Level: "trace", "debug", "info", "warn", "error" or "off", see: https://docs.rs/env_logger/latest/env_logger/         |
 
-*) Not all LDAP-Server support filtering DNs by substrings. This filter works on the client side. The regular expression should ignore case.
+ 1. For reading public data in the source LDAP server, Bind-DN and password may be optional.
+ 1. DNs are relative to the Dns specified in VCAP_SERVICES.
+ 1. Not all LDAP-Server support filtering DNs by substrings. This filter works on the client side. The regular expression should ignore case.
+ 1. Warning: Attribute-Definition in OpenLDAP-Schema: "NAME 'registeredAddress' SUP postalAddress".
+    If postalAddress is specified the OpenLDAP-Server returns registeredAdress as well.
 
 ## Additional information
 

@@ -1,5 +1,5 @@
-use crate::rewrite_engine::Rule;
 use crate::cf_services::LdapService;
+use crate::rewrite_engine::Rule;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
@@ -130,7 +130,6 @@ pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
     )
 }
 
-
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     debug!(r#"connecting using URL: "{}""#, &service.url);
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
@@ -140,13 +139,14 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     ldap3::drive!(conn);
 
     match service {
-        LdapService { bind_dn: Some(bdn), password: Some(pw), ..} => {
+        LdapService {
+            bind_dn: Some(bdn),
+            password: Some(pw),
+            ..
+        } => {
             debug!(r#"binding using DN: "{}""#, &bdn);
-            let _ldap_result = ldap
-            .simple_bind(&bdn, &pw)
-            .await?
-            .success()?;
-        },
+            let _ldap_result = ldap.simple_bind(&bdn, &pw).await?.success()?;
+        }
         _ => {}
     }
     Ok(ldap)
@@ -159,7 +159,7 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
 pub fn result_entries_to_norm_dns(
     result_entries: &Vec<ResultEntry>,
     base_dn: &str,
-    exclude_dns: &Option<Regex>
+    exclude_dns: &Option<Regex>,
 ) -> HashSet<String> {
     let base_dn_len = base_dn.len();
     let mut norm_dns = HashSet::new();
@@ -172,7 +172,7 @@ pub fn result_entries_to_norm_dns(
         let norm_dn = dn.to_lowercase();
         match exclude_dns {
             Some(regex) => {
-                if regex.is_match(&norm_dn)  {
+                if regex.is_match(&norm_dn) {
                     debug!(r#"ignoring dn: "{}""#, &norm_dn);
                 } else {
                     norm_dns.insert(norm_dn);
@@ -187,7 +187,12 @@ pub fn result_entries_to_norm_dns(
     norm_dns
 }
 
-pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str, filter: &str, exclude_dns: &Option<Regex>) -> Result<HashSet<String>, LdapError> {
+pub async fn search_norm_dns(
+    ldap: &mut Ldap,
+    base_dn: &str,
+    filter: &str,
+    exclude_dns: &Option<Regex>,
+) -> Result<HashSet<String>, LdapError> {
     debug!(
         r#"search_norm_dns: search for DNs from base: "{}""#,
         base_dn
@@ -212,7 +217,11 @@ pub async fn search_norm_dns(ldap: &mut Ldap, base_dn: &str, filter: &str, exclu
 
 /// returns exactly one entry if found or an LdapError
 /// Err(LdapResult { result: LdapResult { rc: 32, matched: "ou=Users,dc=test", text: "", refs: [], ctrls: [] } })
-pub async fn search_one_entry_by_dn(ldap: &mut Ldap, dn: &str, attrs: &Vec<String>) -> Result<SearchEntry, LdapError> {
+pub async fn search_one_entry_by_dn(
+    ldap: &mut Ldap,
+    dn: &str,
+    attrs: &Vec<String>,
+) -> Result<SearchEntry, LdapError> {
     debug!(r#"search_one_entry_by_dn: "{}""#, dn);
     let search_result = ldap
         .search(dn, Scope::Base, "(objectClass=*)", attrs)
@@ -293,7 +302,7 @@ pub async fn search_modified_entries_and_rewrite(
     exclude_dns: &Option<Regex>,
     attrs: &Vec<String>,
     exclude_attrs: &Option<Regex>,
-    rewrite_rules: &Vec<Rule>
+    rewrite_rules: &Vec<Rule>,
 ) -> Result<Vec<SearchEntry>, LdapError> {
     let base_dn_len = base_dn.len();
     let complete_filter = match old_modify_timestamp {
@@ -301,8 +310,8 @@ pub async fn search_modified_entries_and_rewrite(
         None => filter.to_string(),
     };
     debug!(
-        r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}""#,
-        base_dn, filter
+        r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}", exclude_dns: {:?}, attrs: {:?}, exclude_attrs: {:?}, rewrite_rules: {:?}"#,
+        base_dn, filter, exclude_dns, attrs, exclude_attrs, rewrite_rules
     );
     let mut search_stream = ldap
         .streaming_search(&base_dn, Scope::Subtree, &complete_filter, attrs)
@@ -321,7 +330,7 @@ pub async fn search_modified_entries_and_rewrite(
                             debug!(r#"ignoring Entry: "{}""#, search_entry.dn);
                             continue;
                         };
-                    },
+                    }
                     None => {}
                 }
                 search_entry.attrs = attr_names_to_lowercase(&search_entry.attrs);
@@ -384,8 +393,8 @@ pub fn diff_attributes(
 pub mod test {
     use super::*;
     use crate::ldap_result_codes::*;
-    use crate::rewrite_engine::Action;
     use crate::ldif::*;
+    use crate::rewrite_engine::Action;
     use indoc::*;
     use ldap3::{LdapError, LdapResult};
     use ldap_test_server::{LdapServerBuilder, LdapServerConn};
@@ -461,7 +470,10 @@ pub mod test {
             ]),
             bin_attrs: HashMap::from([]),
         };
-        assert_eq!(debug_search_entry(&search_entry), r#"dn: "cn=us012345,cn=Users,dc=test", attrs: [givenname 1, objectclass 2, sn 1], bin_attrs: []"#);
+        assert_eq!(
+            debug_search_entry(&search_entry),
+            r#"dn: "cn=us012345,cn=Users,dc=test", attrs: [givenname 1, objectclass 2, sn 1], bin_attrs: []"#
+        );
     }
 
     pub fn assert_attrs_eq(
@@ -825,8 +837,7 @@ pub mod test {
 
         let some_dn = "cn=xy012345,ou=Users,dc=test";
         let attrs = vec!["*".to_string()];
-        let result = search_one_entry_by_dn(&mut ldap_conn, some_dn, &attrs)
-            .await;
+        let result = search_one_entry_by_dn(&mut ldap_conn, some_dn, &attrs).await;
         assert!(matches!(
             &result,
             Err(LdapError::LdapResult {
@@ -837,9 +848,7 @@ pub mod test {
                 }
             }) if text == "authentication required"
         ));
-
     }
-
 
     #[tokio::test]
     async fn test_search_one_entry_by_dn_not_found() {
@@ -927,7 +936,9 @@ pub mod test {
 
         let dn = "cn=admin,dc=test";
         let attrs = vec!["*".to_string()];
-        let entry = search_one_entry_by_dn(&mut ldap_conn, dn, &attrs).await.unwrap();
+        let entry = search_one_entry_by_dn(&mut ldap_conn, dn, &attrs)
+            .await
+            .unwrap();
         debug!("entry: {:?}", entry);
         assert_eq!(entry.dn, dn);
     }
@@ -992,14 +1003,13 @@ pub mod test {
         assert!(result_attrs.contains_key("sn"));
 
         let none_dn = "cn=ab012345,ou=Users,dc=test";
-        let none_result =
-            search_one_entry_by_dn(&mut ldap_conn, none_dn, &attrs).await;
+        let none_result = search_one_entry_by_dn(&mut ldap_conn, none_dn, &attrs).await;
         assert!(none_result.is_err());
         // TODO what kind of error????
     }
 
     #[tokio::test]
-    async fn test_search_modified_entries_attrs_filtered_success() {
+    async fn test_search_modified_entries_no_rewrite_success() {
         let _ = env_logger::try_init();
         let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
@@ -1080,6 +1090,100 @@ pub mod test {
         assert!(attrs.contains_key("userpassword"));
     }
 
+    /// strange behavior:
+    /// attribute "registeredAddress" ist not queried, but returned.
+    #[tokio::test]
+    async fn test_search_modified_entries_with_registered_address() {
+        let _ = env_logger::try_init();
+        let plain_port = next_port();
+        let url = format!("ldap://127.0.0.1:{}", plain_port);
+        let bind_dn = "cn=admin,dc=test".to_string();
+        let password = "secret".to_string();
+        let base_dn = "dc=test".to_string();
+        let content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin,dc=test
+            objectClass: inetOrgPerson
+            sn: Admin
+            userPassword: secret
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 19750101235958Z
+        
+            dn: cn=new012345,ou=Users,dc=test
+            objectClass: top
+            objectClass: person
+            objectClass: organizationalPerson
+            objectClass: inetOrgPerson
+            cn: new012345
+            sn: Habibullah
+            givenName: Amira
+            userPassword: welt123!
+            modifyTimestamp: 20220101235959Z
+            registeredAddress: Bahnhofstr. 1, 11111 Berlin"
+        };
+        let service = LdapService {
+            url: url,
+            bind_dn: Some(bind_dn),
+            password: Some(password),
+            base_dn: base_dn.clone(),
+        };
+        let _server = start_test_server(plain_port, &base_dn, content).await;
+        let mut ldap_conn = simple_connect(&service).await.unwrap();
+
+        // no registeredAddress
+        let attrs = vec![
+            "cn".to_string(),
+            "description".to_string(),
+            "facsimileTelephoneNumber".to_string(),
+            "l".to_string(),
+            "mail".to_string(),
+            "objectClass".to_string(),
+            "ou".to_string(),
+            "postalAddress".to_string(),
+            "postOfficeBox".to_string(),
+            "sn".to_string(),
+            "st".to_string(),
+            "street".to_string(),
+            "telephoneNumber".to_string(),
+            "telexNumber".to_string(),
+        ];
+        let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
+            dn: cn=new012345
+            objectClass: top
+            objectClass: person
+            objectClass: organizationalPerson
+            objectClass: inetOrgPerson
+            cn: new012345
+            sn: Habibullah
+            registeredAddress: Bahnhofstr. 1, 11111 Berlin"
+        })
+        .unwrap();
+
+        let search_entries = search_modified_entries_and_rewrite(
+            &mut ldap_conn,
+            "ou=Users,dc=test",
+            &Some("20201231235959Z".to_string()),
+            "(objectClass=person)",
+            &None,
+            &attrs,
+            &None,
+            &Vec::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_vec_search_entries_eq(&search_entries, &expected_search_entries);
+    }
+
     #[tokio::test]
     async fn test_search_modified_entries_and_rewrite() {
         let _ = env_logger::try_init();
@@ -1129,11 +1233,19 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
         let attrs = vec!["*".to_string()];
-        let rewrite_rules = vec![Rule { actions: vec![
-            Action::Clear { attr: "cn".to_string() },
-            Action::Clear { attr: "sn".to_string() },
-            Action::Clear { attr: "orclpassword".to_string() },
-         ]}];
+        let rewrite_rules = vec![Rule {
+            actions: vec![
+                Action::Clear {
+                    attr: "cn".to_string(),
+                },
+                Action::Clear {
+                    attr: "sn".to_string(),
+                },
+                Action::Clear {
+                    attr: "orclpassword".to_string(),
+                },
+            ],
+        }];
         let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
             dn: cn=new012345
             objectclass: inetOrgPerson
@@ -1167,7 +1279,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn test_search_modified_entries_attrs_filtered_fail() {
+    async fn test_search_modified_entries_and_rewrite_fail() {
         let _ = env_logger::try_init();
         let plain_port = next_port();
         let url = format!("ldap://127.0.0.1:{}", plain_port);
@@ -1266,9 +1378,10 @@ pub mod test {
             .into_iter()
             .collect();
 
-        let norm_dns = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)", &None)
-            .await
-            .unwrap();
+        let norm_dns =
+            search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)", &None)
+                .await
+                .unwrap();
 
         assert_eq!(&norm_dns, &expected_dns);
     }
@@ -1302,7 +1415,8 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
-        let result = search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)", &None).await;
+        let result =
+            search_norm_dns(&mut ldap_conn, "ou=Users,dc=test", "(objectClass=*)", &None).await;
 
         //debug!("result: {:?}", &result);
         //Err(LdapResult { result: LdapResult { rc: 32, matched: "dc=test", text: "", refs: [], ctrls: [] } })

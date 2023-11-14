@@ -62,7 +62,6 @@ pub enum AppConfigError {
     InvalidAttributeName {
         name: String,
     },
-    ExcludeAttrsButNoSpecialSelector,
     DuplicateAttributeName {
         name: String,
     },
@@ -371,10 +370,6 @@ impl AppConfig {
 
     /// check some conditions
     fn analyze_semantic(&self) -> Option<AppConfigError> {
-        let special_selector = self.attrs.contains("*") || self.attrs.contains("+") || self.attrs.is_empty();
-        if self.exclude_attrs.is_some() && !special_selector {
-            return Some(AppConfigError::ExcludeAttrsButNoSpecialSelector);
-        }
         if self.daemon && self.job_sleep.is_none() {
             return Some(AppConfigError::DaemonButNoSleep);
         }
@@ -559,31 +554,6 @@ mod test {
             }
             _ => {
                 panic!("unexpected result");
-            }
-        }
-    }
-
-    #[test]
-    fn test_from_map_exclude_attrs_without_special_selector() {
-        let param_map = HashMap::from([
-            (DAEMON, "true".to_string()),
-            (JOB_SLEEP, "10 sec".to_string()),
-            (DRY_RUN, "true".to_string()),
-            (ATTRS, "cn sn givenName".to_string()),
-            (EXCLUDE_ATTRS, "^givenname$".to_string()),
-            (VCAP_SERVICES, r#"{"user-provided":[]}"#.to_string()),
-            (SYNCHRONIZATIONS, "[]".to_string()),
-        ]);
-
-        let result = AppConfig::from_map(&param_map);
-        debug!("result: {:?}", &result);
-        match result {
-            Err(AppConfigError::ExcludeAttrsButNoSpecialSelector) => {}
-            Err(err) => {
-                panic!("unexpected err result: {:?}", err);
-            }
-            Ok(app_config) => {
-                panic!("unexpected ok result: {:?}", app_config);
             }
         }
     }
