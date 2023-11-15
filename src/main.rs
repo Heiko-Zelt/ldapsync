@@ -3,9 +3,9 @@ pub mod cf_services;
 pub mod ldap_utils;
 pub mod ldif;
 //pub mod serde_search_entry;
+pub mod rewrite_engine;
 pub mod synchronization;
 pub mod synchronization_config;
-pub mod rewrite_engine;
 #[macro_use]
 pub mod ldap_result_codes;
 
@@ -13,11 +13,11 @@ use crate::app_config::AppConfig;
 use crate::ldap_result_codes::result_text;
 use crate::synchronization::{SyncStatistics, Synchronization};
 use chrono::{DateTime, Utc};
+use env_logger::{Builder, Target};
 use ldap3::{LdapError, LdapResult};
 use log::{error, info};
-use env_logger::{Builder, Target};
-use tokio::time::sleep;
 use std::collections::HashMap;
+use tokio::time::sleep;
 
 /// main function.
 /// reads configuration from environment variables.
@@ -67,7 +67,7 @@ async fn params_read(params_map: &HashMap<&str, String>) {
 /// in an endless loop call synchronize() for every synchronization.
 async fn lets_go(app_config: &AppConfig) {
     let attrs_vec = Vec::from_iter(app_config.attrs.iter().cloned());
-    let synchronizations: Vec<Synchronization> = app_config
+    let mut synchronizations: Vec<Synchronization> = app_config
         .synchronization_configs
         .iter()
         .map(|sync_config| Synchronization {
@@ -79,21 +79,17 @@ async fn lets_go(app_config: &AppConfig) {
             attrs: &attrs_vec,
             exclude_attrs: &app_config.exclude_attrs,
             rewrite_rules: &app_config.rewrite_rules,
+            old_sync_datetime: None,
         })
         .collect();
-
-    // At the very first run there is no synchronisation timestamp.
-    // All entries of the subtrees are read from source directory.
-    let mut old_sync_datetime = None;
 
     // endless loop/daemon
     'daemon: loop {
         info!("Start synchronizations.");
-        let new_sync_datetime = Utc::now();
 
-        for synchro in synchronizations.iter() {
-            let result = synchro.synchronize(old_sync_datetime).await;
-            print_result_of_synchronizations(&result, old_sync_datetime);
+        for synchro in synchronizations.iter_mut() {
+            let result = synchro.synchronize().await;
+            print_result_of_synchronizations(&result, synchro.old_sync_datetime);
             // Some errors need a configuration change and restart, others may be caused by a temporary problem.
             match result {
                 Err(
@@ -106,17 +102,8 @@ async fn lets_go(app_config: &AppConfig) {
                     | LdapError::InvalidScopeString(_)
                     | LdapError::UnrecognizedCriticalExtension(_),
                 ) => break 'daemon,
-                Err(_) |Ok(_) => {},
+                Err(_) | Ok(_) => {}
             }
-        }
-
-        // TODO Prio 3: one timestamp for every sync-subtree (2-dimensional Vec)
-        if !app_config.dry_run {
-            info!(
-                "replacing old timestamp {:?} with new timestamp {:?}.",
-                old_sync_datetime, new_sync_datetime
-            );
-            old_sync_datetime = Some(new_sync_datetime);
         }
 
         match app_config.job_sleep {
@@ -170,7 +157,197 @@ fn print_result_of_synchronizations(
 
 #[cfg(test)]
 mod test {
-    //use super::*;
+    use super::*;
+    use crate::app_config::*;
+    use crate::ldap_utils::test::{
+        assert_vec_search_entries_eq, next_port, search_all, start_test_server,
+    };
+    use crate::ldif::parse_ldif_as_search_entries;
+    use indoc::indoc;
+    use ldap3::LdapConnAsync;
+    use log::debug;
+    use std::collections::HashMap;
+    use tokio::time::Duration;
 
-    // TODO Prio 1: write test for lets_go() and print_result_of_synchronizations()
+    /// Integration test.
+    /// It seems like the test LDAP server resets it's content for every new connection.
+    /// Then, how to test?
+    #[ignore]
+    #[tokio::test]
+    pub async fn test_params_read_simple_example() {
+        let _ = env_logger::try_init();
+        let source_plain_port = next_port();
+        let source_url = format!("ldap://127.0.0.1:{}", source_plain_port);
+        let _source_bind_dn = "cn=admin1,dc=test".to_string();
+        let _source_password = "secret1".to_string();
+        let source_base_dn = "dc=test".to_string();
+        let source_content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+            modifyTimestamp: 20231019182734Z
+
+            dn: cn=admin1,dc=test
+            objectClass: inetOrgPerson
+            cn: admin
+            sn: Admin
+            userPassword: secret1
+            modifyTimestamp: 20231019182735Z
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+            modifyTimestamp: 20231019182736Z
+            description: additional attribute
+
+            # to be modified
+            dn: cn=xy012345,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: new_password!
+            modifyTimestamp: 20231019182739Z
+            description: changed
+            
+            # to be added
+            dn: cn=new012345,ou=Users,dc=test
+            cn: new012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: some_password!
+            modifyTimestamp: 20231019182739Z
+            description: changed"
+        };
+
+        let target_plain_port = next_port();
+        let target_url = format!("ldap://127.0.0.1:{}", target_plain_port);
+        let target_bind_dn = "cn=admin2,dc=test".to_string();
+        let target_password = "secret2".to_string();
+        let target_base_dn = "dc=test".to_string();
+        let target_content = indoc! { "
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin2,dc=test
+            objectClass: inetOrgPerson
+            cn: admin2
+            sn: Admin
+            userPassword: secret2
+    
+            # to be modified
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+        
+            # to be deleted
+            dn: o=de,ou=Users,dc=test
+            ObjectClass: top
+            objectClass: organization
+            o: de
+            
+            # to be modified
+            dn: cn=xy012345,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: old_password!"
+        };
+        let _server1 = start_test_server(source_plain_port, &source_base_dn, source_content).await;
+        let _server2 = start_test_server(target_plain_port, &target_base_dn, target_content).await;
+
+        let ldap_service1_templ = r#"{"name": "ldap1", "credentials": {"base_dn": "dc=test", "bind_dn": "cn=admin1,dc=test", "password": "secret1", "url": "url1"}}"#;
+        let ldap_service2_templ = r#"{"name": "ldap2", "credentials": {"base_dn": "dc=test", "bind_dn": "cn=admin2,dc=test", "password": "secret2", "url": "url2"}}"#;
+        let ldap_service1 = ldap_service1_templ.replace("url1", &source_url);
+        let ldap_service2 = ldap_service2_templ.replace("url2", &target_url);
+        let vcap_services_templ = indoc! {r#"
+            {
+                "user-provided": [
+                    service1,
+                    service2
+                ]
+            }"#};
+        let vcap_services_json = vcap_services_templ
+            .replace("service1", &ldap_service1.to_string())
+            .replace("service2", &ldap_service2.to_string());
+
+        let synchronizations_json = indoc! {r#"
+        [{
+            "source":"ldap1",
+            "target":"ldap2",
+            "base_dns":["ou=Users"]
+        }]
+        "#}
+        .to_string();
+
+        let params_map = HashMap::from([
+            (DAEMON, "false".to_string()),
+            (DRY_RUN, "false".to_string()),
+            (VCAP_SERVICES, vcap_services_json),
+            (SYNCHRONIZATIONS, synchronizations_json),
+            (ATTRS, "*".to_string()),
+        ]);
+
+        let expected_search_entries = parse_ldif_as_search_entries(indoc! {"
+            dn: dc=test
+            objectclass: dcObject
+            objectclass: organization
+            o: Test Org
+            dc: test
+
+            dn: cn=admin2,dc=test
+            objectClass: inetOrgPerson
+            cn: admin2
+            sn: Admin
+            userPassword: secret2
+
+            dn: ou=Users,dc=test
+            objectClass: top
+            objectClass: organizationalUnit
+            ou: Users
+
+            # to be modified
+            dn: cn=xy012345,ou=Users,dc=test
+            cn: xy012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: new_password!
+            description: changed
+        
+            # to be added
+            dn: cn=new012345,ou=users,dc=test
+            cn: new012345
+            objectClass: inetOrgPerson
+            sn: Müller
+            givenName: André
+            userPassword: some_password!
+            description: changed"
+        })
+        .unwrap();
+
+        debug!("{:?}", &params_map);
+        params_read(&params_map).await;
+
+        sleep(Duration::from_millis(1000)).await;
+        let (conn, mut target_ldap) = LdapConnAsync::new(&target_url).await.unwrap();
+        ldap3::drive!(conn);
+        target_ldap
+            .simple_bind(&target_bind_dn, &target_password)
+            .await
+            .unwrap();
+        let target_entries_after = search_all(&mut target_ldap, &target_base_dn).await.unwrap();
+        debug!("target entries after: {:?}", target_entries_after);
+
+        assert_vec_search_entries_eq(&target_entries_after, &expected_search_entries);
+    }
 }

@@ -1,4 +1,5 @@
 use crate::cf_services::{map_ldap_services, parse_service_types, LdapService, LdapServiceError};
+use crate::rewrite_engine::Rule;
 use crate::synchronization_config::SynchronizationConfig;
 use log::{debug, info};
 use once_cell::sync::Lazy;
@@ -6,7 +7,6 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::{env, env::VarError, str::FromStr, time::Duration};
-use crate::rewrite_engine::Rule;
 
 /// names of environment variables
 pub const VCAP_SERVICES: &str = "VCAP_SERVICES";
@@ -29,7 +29,7 @@ static ATTR_NAME_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"^(\+|\*|[a-z][0-9a-z;]*)$"#).unwrap()); // assumption: works always or never
 
 static DURATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new( " *([1-9][0-9]*) *(sec|min) *").unwrap());
+    Lazy::new(|| Regex::new(" *([1-9][0-9]*) *(sec|min) *").unwrap());
 
 #[derive(Debug)]
 pub enum LdapServiceUsage {
@@ -79,8 +79,8 @@ pub enum AppConfigError {
     SleepButNoDaemon,
     LdapServiceError {
         service_name: String,
-        ldap_service_error: LdapServiceError
-    }
+        ldap_service_error: LdapServiceError,
+    },
 }
 
 #[derive(Debug)]
@@ -193,24 +193,20 @@ impl AppConfig {
         }
     }
 
-    fn parse_rewrite(
-        json_str: &Option<&String>,
-    ) -> Result<Vec<Rule>, AppConfigError> {
+    fn parse_rewrite(json_str: &Option<&String>) -> Result<Vec<Rule>, AppConfigError> {
         match json_str {
             Some(s) => {
                 debug!("{}: {}", REWRITE, s);
                 Ok(
-                    Rule::parse_rules(&s).map_err(|err| {
-                        AppConfigError::EnvVarParseJsonError {
-                            env_var_name: REWRITE.to_string(),
-                            cause: err,
-                        }
+                    Rule::parse_rules(&s).map_err(|err| AppConfigError::EnvVarParseJsonError {
+                        env_var_name: REWRITE.to_string(),
+                        cause: err,
                     })?,
                 )
             }
             None => Ok(Vec::new()),
         }
-    }    
+    }
 
     fn parse_vcap_services(
         json_str: &Option<&String>,
@@ -262,12 +258,8 @@ impl AppConfig {
     /// TODO: Check syntax. Possibly return Err().
     fn parse_filter(filter_str: &Option<&String>) -> Result<String, AppConfigError> {
         match filter_str {
-            Some(s) => {
-                Ok(s.to_string())
-            }
-            None => {
-                Ok("(objectclass=*)".to_string())
-            }
+            Some(s) => Ok(s.to_string()),
+            None => Ok("(objectclass=*)".to_string()),
         }
     }
 
@@ -284,11 +276,12 @@ impl AppConfig {
         match attrs_str {
             Some(s) => {
                 let trimmed = s.trim();
-                if trimmed.is_empty() { // special case, empty string
+                if trimmed.is_empty() {
+                    // special case, empty string
                     Ok(HashSet::new())
                 } else {
                     let mut verified_parts: HashSet<String> = HashSet::new();
-                    for part in s.split_whitespace().map(|s| s.to_lowercase()){
+                    for part in s.split_whitespace().map(|s| s.to_lowercase()) {
                         if (!ATTR_NAME_REGEX.is_match(&part)) || (part == "dn") {
                             return Err(AppConfigError::InvalidAttributeName { name: part });
                         };
@@ -324,9 +317,7 @@ impl AppConfig {
         }
     }
 
-    fn parse_exclude_dns(
-        exclude_attrs: &Option<&String>,
-    ) -> Result<Option<Regex>, AppConfigError> {
+    fn parse_exclude_dns(exclude_attrs: &Option<&String>) -> Result<Option<Regex>, AppConfigError> {
         match exclude_attrs {
             Some(s) => {
                 debug!("{}: {}", EXCLUDE_DNS, s);
@@ -396,7 +387,12 @@ impl AppConfig {
         for (name, ldap_service) in self.ldap_services.iter() {
             let result = ldap_service.analyze_semantic();
             match result {
-                Some(err) => { return Some(AppConfigError::LdapServiceError { service_name: name.to_string(), ldap_service_error: err })}, 
+                Some(err) => {
+                    return Some(AppConfigError::LdapServiceError {
+                        service_name: name.to_string(),
+                        ldap_service_error: err,
+                    })
+                }
                 None => {}
             }
         }
@@ -524,7 +520,9 @@ mod test {
             (DAEMON, "true".to_string()),
             (JOB_SLEEP, "10 sec".to_string()),
             (DRY_RUN, "true".to_string()),
-            (VCAP_SERVICES, indoc! {r#"
+            (
+                VCAP_SERVICES,
+                indoc! {r#"
             {
                 "user-provided": [
                     {
@@ -537,7 +535,8 @@ mod test {
                     }
                 ]
             }"#}
-            .to_string()),
+                .to_string(),
+            ),
             (SYNCHRONIZATIONS, "[]".to_string()),
             (ATTRS, "cn ou o sn givenName description".to_string()),
         ]);
@@ -808,14 +807,23 @@ mod test {
     }
 
     #[rstest]
-    #[case(None, r#"Err(EnvVarError { env_var_name: "LS_ATTRS", cause: NotPresent })"#)]
+    #[case(
+        None,
+        r#"Err(EnvVarError { env_var_name: "LS_ATTRS", cause: NotPresent })"#
+    )]
     #[case(Some("dn"), r#"Err(InvalidAttributeName { name: "dn" })"#)]
     #[case(Some(" DN "), r#"Err(InvalidAttributeName { name: "dn" })"#)]
-    #[case(Some("description DN ou givenName"), r#"Err(InvalidAttributeName { name: "dn" })"#)]
+    #[case(
+        Some("description DN ou givenName"),
+        r#"Err(InvalidAttributeName { name: "dn" })"#
+    )]
     #[case(Some("%"), r#"Err(InvalidAttributeName { name: "%" })"#)]
     #[case(Some("%cn"), r#"Err(InvalidAttributeName { name: "%cn" })"#)]
     #[case(Some("0cn"), r#"Err(InvalidAttributeName { name: "0cn" })"#)]
-    #[case(Some("cn CN givenName givenname"), r#"Err(DuplicateAttributeName { name: "cn" })"#)]
+    #[case(
+        Some("cn CN givenName givenname"),
+        r#"Err(DuplicateAttributeName { name: "cn" })"#
+    )]
     fn test_parse_attrs_err(#[case] s: Option<&str>, #[case] expected: &str) {
         let live_longer = match s {
             Some(h) => Some(String::from(h)),

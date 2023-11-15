@@ -1,14 +1,14 @@
-use chrono::{Utc, DateTime};
+use chrono::{DateTime, Utc};
 use ldap3::{Ldap, LdapError, LdapResult, SearchEntry};
 use log::{debug, info, warn};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 use crate::cf_services::LdapService;
-use crate::ldap_utils::*;
 use crate::ldap_result_codes::*;
-use crate::synchronization_config::SynchronizationConfig;
+use crate::ldap_utils::*;
 use crate::rewrite_engine::Rule;
+use crate::synchronization_config::SynchronizationConfig;
 
 /// The object class "extensibleObject" is defined in OpenLdap core schema.
 /// So there is no need to extend the schema with an own object class.
@@ -30,7 +30,7 @@ pub struct SyncStatistics {
     pub attrs_modified: usize,
 
     /// number of entries deleted
-    pub deleted: usize
+    pub deleted: usize,
 }
 
 #[derive(Debug)]
@@ -59,28 +59,40 @@ pub struct Synchronization<'a> {
     pub exclude_attrs: &'a Option<Regex>,
     pub rewrite_rules: &'a Vec<Rule>,
     pub dry_run: bool,
+
+    /// this field mutates
+    pub old_sync_datetime: Option<DateTime<Utc>>,
 }
 
 impl<'a> Synchronization<'a> {
-
     /// synchonizes 2 LDAP directories.
     /// - connects to both directories
     /// - for every DN: sync_delete() & sync_modify()
     /// - disconnects
     /// returns: number of touched (added, modified and delted) entries)
     /// TODO: Wenn zu synchronisierender Base-DN im Ziel nicht existiert, dann Eintrag anlegen (statt RC 32 no such object ausgeben).
-    pub async fn synchronize(&self, old_sync_datetime: Option<DateTime<Utc>>) -> Result<SyncStatistics, LdapError> {
-        info!(r#"synchronize: source: "{}" --> target: "{}""#, &self.sync_config.source, &self.sync_config.target);
+    pub async fn synchronize(&mut self) -> Result<SyncStatistics, LdapError> {
+        info!(
+            r#"synchronize: source: "{}" --> target: "{}""#,
+            &self.sync_config.source, &self.sync_config.target
+        );
+        let new_sync_datetime = Utc::now();
+
         let source_service = self.ldap_services.get(&self.sync_config.source).unwrap();
         let target_service = self.ldap_services.get(&self.sync_config.target).unwrap();
 
-        let mut sync_statistics = SyncStatistics { recently_modified: 0, added: 0, attrs_modified: 0, deleted: 0 };
+        let mut sync_statistics = SyncStatistics {
+            recently_modified: 0,
+            added: 0,
+            attrs_modified: 0,
+            deleted: 0,
+        };
         let mut source_ldap = simple_connect(source_service).await?;
         let mut target_ldap = simple_connect(target_service).await?;
 
-        let sync_ldap_timestamp = match old_sync_datetime {
-           Some(datetime) => Some(format_ldap_timestamp(&datetime)),
-           None => None,
+        let sync_ldap_timestamp = match self.old_sync_datetime {
+            Some(datetime) => Some(format_ldap_timestamp(&datetime)),
+            None => None,
         };
 
         for dn in self.sync_config.base_dns.iter() {
@@ -118,6 +130,16 @@ impl<'a> Synchronization<'a> {
         source_ldap.unbind().await?;
         target_ldap.unbind().await?;
 
+        // TODO Prio 3: one timestamp for every sync-subtree (2-dimensional Vec)
+        // TODO Prio 1: at least for every synchronization
+        if !self.dry_run {
+            info!(
+                "replacing old timestamp {:?} with new timestamp {:?}.",
+                self.old_sync_datetime, new_sync_datetime
+            );
+            self.old_sync_datetime = Some(new_sync_datetime);
+        }
+
         Ok(sync_statistics)
     }
 
@@ -141,36 +163,41 @@ impl<'a> Synchronization<'a> {
         exclude_dns: &Option<Regex>,
         dry_run: bool,
     ) -> Result<usize, LdapError> {
-        info!(r#"sync_delete: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}")"#, source_base_dn, target_base_dn, sync_dn);
+        info!(
+            r#"sync_delete: source_base_dn: "{}", target_base_dn: "{}", sync_dn: "{}")"#,
+            source_base_dn, target_base_dn, sync_dn
+        );
 
         let target_sync_dn = join_2_dns(sync_dn, target_base_dn);
-        let target_norm_dns = search_norm_dns(target_ldap, &target_sync_dn, filter, exclude_dns).await?;
-        
-        debug!("sync_delete: target DNs:");
+        let target_norm_dns =
+            search_norm_dns(target_ldap, &target_sync_dn, filter, exclude_dns).await?;
+
         // TODO nur ausführen, wenn log level debug
-        log_debug_dns("sync_delete:", &target_norm_dns);
+        log_debug_dns("sync_delete: target entry:", &target_norm_dns);
 
         // Wenn es im Ziel-System keine Einträge gibt, kann auch nichts gelöscht werden.
         if target_norm_dns.len() == 0 {
             Ok(0)
         } else {
             let source_sync_dn = join_2_dns(sync_dn, source_base_dn);
-            let source_norm_dns = search_norm_dns(source_ldap, &source_sync_dn, filter, exclude_dns).await?;
-            debug!("sync_delete: source DNs:");
+            let source_norm_dns =
+                search_norm_dns(source_ldap, &source_sync_dn, filter, exclude_dns).await?;
             // TODO nur ausführen, wenn log level debug
-            log_debug_dns("sync_delete:", &source_norm_dns);
+            log_debug_dns("sync_delete: source entry:", &source_norm_dns);
             let garbage_diff = target_norm_dns.difference(&source_norm_dns);
             let mut garbage_vec: Vec<&String> = garbage_diff.collect();
 
             // Von den Blättern zur Wurzel, längere DNs zuerst sortieren. Absteigend nach Länge der DNs.
-            garbage_vec.sort_by(|a ,b| compare_by_length_desc_then_alphabethical(a, b));
+            garbage_vec.sort_by(|a, b| compare_by_length_desc_then_alphabethical(a, b));
 
             for dn in garbage_vec.iter() {
                 // norm_dn ends with a comma if it is not empty
                 //let target_dn = format!("{}{}", norm_dn, target.base_dn);
                 let target_dn = join_3_dns(dn, sync_dn, target_base_dn);
-                info!(r#"sync_delete: deleting entry: "{}""#, target_dn);
-                if !dry_run {
+                if dry_run {
+                    info!(r#"sync_delete: would delete entry: "{}""#, target_dn);
+                } else {
+                    info!(r#"sync_delete: deleting entry: "{}""#, target_dn);
                     target_ldap.delete(&target_dn).await?;
                 }
             }
@@ -233,14 +260,19 @@ impl<'a> Synchronization<'a> {
         )
         .await?;
 
-        let mut modi_statistics = ModiStatistics { recently_modified: source_search_entries.len(), added: 0, attrs_modified: 0 };
+        let mut modi_statistics = ModiStatistics {
+            recently_modified: source_search_entries.len(),
+            added: 0,
+            attrs_modified: 0,
+        };
 
         // Von der Wurzel zu den Blättern, kürzere DNs zuerst sortieren. Austeigend nach Länger der DNs.
         source_search_entries.sort_by(|a, b| a.dn.len().cmp(&b.dn.len()));
 
         info!(
             r#"sync_modify: subtree: "{}", number of recently modified entries: {}"#,
-            source_sync_dn, source_search_entries.len()
+            source_sync_dn,
+            source_search_entries.len()
         );
 
         for source_search_entry in source_search_entries {
@@ -254,7 +286,7 @@ impl<'a> Synchronization<'a> {
             )
             .await?;
             match modified {
-                ModiOne::Unchanged => {},
+                ModiOne::Unchanged => {}
                 ModiOne::Added => modi_statistics.added += 1,
                 ModiOne::AttrsModified => modi_statistics.attrs_modified += 1,
             }
@@ -270,43 +302,69 @@ impl<'a> Synchronization<'a> {
         exclude_attrs: &Option<Regex>,
         dry_run: bool,
     ) -> Result<ModiOne, LdapError> {
-        debug!(r#"sync_modify_one_entry: source entry: {}"#, debug_search_entry(&source_search_entry));
+        debug!(
+            r#"sync_modify_one_entry: source entry: {}"#,
+            debug_search_entry(&source_search_entry)
+        );
         if source_search_entry.bin_attrs.len() != 0 {
-            warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry."#);
+            warn!(
+                r#"sync_modify_one_entry: Ignoring attribute(s) with binary value in source entry."#
+            );
         }
 
         let target_dn = join_2_dns(&source_search_entry.dn, target_base_dn);
-        
-        let target_search_result = 
-            search_one_entry_by_dn(target_ldap, &target_dn, attrs).await;
+
+        let target_search_result = search_one_entry_by_dn(target_ldap, &target_dn, attrs).await;
 
         match target_search_result {
             Ok(mut entry) => {
                 match exclude_attrs {
                     Some(ex) => entry.attrs = filter_attrs(&entry.attrs, &ex),
-                    None => {},
+                    None => {}
                 };
-                debug!(r#"sync_modify_one_entry: target entry exists: {})"#, debug_search_entry(&entry));
+                debug!(
+                    r#"sync_modify_one_entry: target entry exists: {})"#,
+                    debug_search_entry(&entry)
+                );
                 if entry.bin_attrs.len() != 0 {
-                    warn!(r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry."#);
+                    warn!(
+                        r#"sync_modify_one_entry: Ignoring attribute(s) with binary value(s) in target entry."#
+                    );
                 }
                 let mods = diff_attributes(&source_search_entry.attrs, &entry.attrs);
+
+                // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
                 if mods.is_empty() {
-                    debug!(r#"sync_modify_one_entry: dn: "{}", no differences found"#, entry.dn);
+                    debug!(
+                        r#"sync_modify_one_entry: dn: "{}", no differences found"#,
+                        entry.dn
+                    );
                     return Ok(ModiOne::Unchanged);
                 }
-                info!(r#"sync_modify_one_entry: modifying entry: dn: "{}", modifications: {:?}"#, entry.dn, debug_mods(&mods));
-                // If mods is empty, maybe because only excluded attributes have changed. Then don't modify.
-                if !dry_run {
+
+                if dry_run {
+                    info!(
+                        r#"sync_modify_one_entry: would modify entry: dn: "{}", modifications: {:?}"#,
+                        entry.dn,
+                        debug_mods(&mods)
+                    );
+                } else {
+                    info!(
+                        r#"sync_modify_one_entry: modifying entry: dn: "{}", modifications: {:?}"#,
+                        entry.dn,
+                        debug_mods(&mods)
+                    );
                     target_ldap.modify(&target_dn, mods).await?;
                 }
                 Ok(ModiOne::AttrsModified)
             }
-            Err(LdapError::LdapResult { // no problem => add entry
-                result: LdapResult {
-                    rc: RC_NO_SUCH_OBJECT!(),
-                    ..
-                }
+            Err(LdapError::LdapResult {
+                // no problem => add entry
+                result:
+                    LdapResult {
+                        rc: RC_NO_SUCH_OBJECT!(),
+                        ..
+                    },
             }) => {
                 debug!(r#"sync_modify_one_entry: target entry did not exist"#);
                 // convert HashMap<String, Vec<String>> to Vec<(String, HashSet<String>)>
@@ -319,13 +377,21 @@ impl<'a> Synchronization<'a> {
                         (a, vs)
                     })
                     .collect::<Vec<(String, HashSet<String>)>>();
-                info!(r#"sync_modify_one_entry: adding entry: {}"#, debug_search_entry(&source_search_entry));
-                if !dry_run {
+                if dry_run {
+                    info!(
+                        r#"sync_modify_one_entry: would add entry: {}"#,
+                        debug_search_entry(&source_search_entry)
+                    );
+                } else {
+                    info!(
+                        r#"sync_modify_one_entry: adding entry: {}"#,
+                        debug_search_entry(&source_search_entry)
+                    );
                     target_ldap.add(&target_dn, target_attrs).await?;
                 }
                 Ok(ModiOne::Added)
             }
-            Err(err) => return Err(err) // other return code
+            Err(err) => return Err(err), // other return code
         }
     }
 }
@@ -334,12 +400,13 @@ impl<'a> Synchronization<'a> {
 mod test {
     use super::*;
     use crate::ldap_utils::simple_connect;
-    use crate::ldap_utils::test::{start_test_server, search_all, assert_vec_search_entries_eq, next_port};
+    use crate::ldap_utils::test::{
+        assert_vec_search_entries_eq, next_port, search_all, start_test_server,
+    };
     use crate::ldif::parse_ldif_as_search_entries;
     use crate::synchronization_config::SynchronizationConfig;
-    use indoc::*;
     use chrono::{TimeZone, Utc};
-  
+    use indoc::*;
 
     #[tokio::test]
     async fn test_sync_modified() {
@@ -438,18 +505,10 @@ mod test {
             userPassword: hallowelt123!"
         };
 
-        let _source_server = start_test_server(
-            source_plain_port,
-            &source_base_dn,
-            source_content,
-        )
-        .await;
-        let _target_server = start_test_server(
-            target_plain_port,
-            &target_base_dn,
-            target_content,
-        )
-        .await;
+        let _source_server =
+            start_test_server(source_plain_port, &source_base_dn, source_content).await;
+        let _target_server =
+            start_test_server(target_plain_port, &target_base_dn, target_content).await;
 
         //let src_base_dn = "dc=test".to_string();
         //let _ldap_conn = simple_connect_sync(&src_url, &src_bind_dn, &src_password).unwrap();
@@ -486,13 +545,13 @@ mod test {
             &Vec::new(),
             true,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
         info!("result: {:?}", result);
         assert_eq!(result.recently_modified, 4);
         assert_eq!(result.added, 2);
         assert_eq!(result.attrs_modified, 1);
     }
-
 
     #[tokio::test]
     async fn test_sync_delete_successful() {
@@ -572,18 +631,10 @@ mod test {
             userPassword: hallowelt123!"
         };
 
-        let _source_server = start_test_server(
-            source_plain_port,
-            &source_base_dn,
-            source_content,
-        )
-        .await;
-        let _target_server = start_test_server(
-            target_plain_port,
-            &target_base_dn,
-            target_content,
-        )
-        .await;
+        let _source_server =
+            start_test_server(source_plain_port, &source_base_dn, source_content).await;
+        let _target_server =
+            start_test_server(target_plain_port, &target_base_dn, target_content).await;
 
         let source_service = LdapService {
             url: source_url,
@@ -602,7 +653,7 @@ mod test {
         let mut source_ldap = simple_connect(&source_service).await.unwrap();
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
 
-        let expected_source_entries = parse_ldif_as_search_entries( indoc!{ "
+        let expected_source_entries = parse_ldif_as_search_entries(indoc! { "
             dn: dc=source
             objectClass: dcObject
             objectClass: organization
@@ -629,9 +680,10 @@ mod test {
             objectClass: top
             objectClass: organization
             o: ABC"
-        }).unwrap();
+        })
+        .unwrap();
 
-        let expected_target_entries = parse_ldif_as_search_entries( indoc!{ "
+        let expected_target_entries = parse_ldif_as_search_entries(indoc! { "
             dn: dc=target
             o: Target Org
             dc: target
@@ -653,7 +705,8 @@ mod test {
             objectClass: top
             objectClass: organization
             o: de"
-        }).unwrap();
+        })
+        .unwrap();
 
         let result = Synchronization::sync_delete(
             &mut source_ldap,
@@ -665,8 +718,8 @@ mod test {
             &None,
             false,
         )
-        .await.unwrap();
-        
+        .await
+        .unwrap();
 
         info!("result: {:?}", result);
         assert_eq!(result, 2);
@@ -679,7 +732,6 @@ mod test {
         debug!("target entries {:?}", target_search_entries);
         assert_vec_search_entries_eq(&target_search_entries, &expected_target_entries);
     }
-
 
     #[tokio::test]
     async fn test_sync_delete_base_dn_not_found_in_source() {
@@ -737,18 +789,10 @@ mod test {
             o: de"
         };
 
-        let _source_server = start_test_server(
-            source_plain_port,
-            &source_base_dn,
-            source_content,
-        )
-        .await;
-        let _target_server = start_test_server(
-            target_plain_port,
-            &target_base_dn,
-            target_content,
-        )
-        .await;
+        let _source_server =
+            start_test_server(source_plain_port, &source_base_dn, source_content).await;
+        let _target_server =
+            start_test_server(target_plain_port, &target_base_dn, target_content).await;
 
         let source_service = LdapService {
             url: source_url,
@@ -778,11 +822,15 @@ mod test {
             false,
         )
         .await;
- 
-        debug!("result: {:?}", result);
-        assert!(matches!(&result, Err(LdapError::LdapResult{result: LdapResult { rc: 32, .. }})));
 
-    }    
+        debug!("result: {:?}", result);
+        assert!(matches!(
+            &result,
+            Err(LdapError::LdapResult {
+                result: LdapResult { rc: 32, .. }
+            })
+        ));
+    }
 
     #[tokio::test]
     async fn test_synchronisation() {
@@ -942,19 +990,12 @@ mod test {
             sn: Müller
             # no givenName
             userPassword: hallowelt123!"
-        }).unwrap();
-        let _source_server = start_test_server(
-            source_plain_port,
-            &source_base_dn,
-            source_content,
-        )
-        .await;
-        let _target_server = start_test_server(
-            target_plain_port,
-            &target_base_dn,
-            target_content,
-        )
-        .await;
+        })
+        .unwrap();
+        let _source_server =
+            start_test_server(source_plain_port, &source_base_dn, source_content).await;
+        let _target_server =
+            start_test_server(target_plain_port, &target_base_dn, target_content).await;
         let source_service = LdapService {
             url: source_url,
             bind_dn: Some(source_bind_dn),
@@ -967,13 +1008,16 @@ mod test {
             password: Some(target_password),
             base_dn: target_base_dn.clone(),
         };
-        let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service.clone())]);
+        let ldap_services = HashMap::from([
+            ("ldap1".to_string(), source_service),
+            ("ldap2".to_string(), target_service.clone()),
+        ]);
         let sync_config = SynchronizationConfig {
             source: "ldap1".to_string(),
             target: "ldap2".to_string(),
             base_dns: vec!["ou=Users".to_string()],
         };
-        let synchronization = Synchronization {
+        let mut synchronization = Synchronization {
             ldap_services: &ldap_services,
             sync_config: &sync_config,
             filter: &"(objectClass=*)".to_string(),
@@ -982,12 +1026,10 @@ mod test {
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
             rewrite_rules: &Vec::new(),
             dry_run: false,
+            old_sync_datetime: Some(Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap()),
         };
-        let date_time = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
 
-        
-        let result = synchronization.synchronize(Some(date_time)).await.unwrap();
-
+        let result = synchronization.synchronize().await.unwrap();
 
         info!("result: {:?}", result);
         assert_eq!(result.recently_modified, 4); // of 5. one entry is very old
@@ -996,7 +1038,9 @@ mod test {
         assert_eq!(result.deleted, 2);
 
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
-        let after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
+        let after = search_all(&mut target_ldap, &target_service.base_dn)
+            .await
+            .unwrap();
         print!("after {:?}", after);
 
         assert_vec_search_entries_eq(&after, &expected);
@@ -1189,19 +1233,12 @@ mod test {
             givenName: André
             userPassword: new_password!
             description: changed"
-        }).unwrap();
-        let _source_server = start_test_server(
-            source_plain_port,
-            &source_base_dn,
-            source_content,
-        )
-        .await;
-        let _target_server = start_test_server(
-            target_plain_port,
-            &target_base_dn,
-            target_content,
-        )
-        .await;
+        })
+        .unwrap();
+        let _source_server =
+            start_test_server(source_plain_port, &source_base_dn, source_content).await;
+        let _target_server =
+            start_test_server(target_plain_port, &target_base_dn, target_content).await;
         let source_service = LdapService {
             url: source_url,
             bind_dn: Some(source_bind_dn),
@@ -1214,13 +1251,16 @@ mod test {
             password: Some(target_password),
             base_dn: target_base_dn.clone(),
         };
-        let ldap_services = HashMap::from( [("ldap1".to_string(), source_service), ("ldap2".to_string(), target_service.clone())]);
+        let ldap_services = HashMap::from([
+            ("ldap1".to_string(), source_service),
+            ("ldap2".to_string(), target_service.clone()),
+        ]);
         let sync_config = SynchronizationConfig {
             source: "ldap1".to_string(),
             target: "ldap2".to_string(),
             base_dns: vec!["ou=Users".to_string()],
         };
-        let synchronization = Synchronization {
+        let mut synchronization = Synchronization {
             ldap_services: &ldap_services,
             sync_config: &sync_config,
             filter: &"(objectClass=*)".to_string(),
@@ -1229,12 +1269,10 @@ mod test {
             exclude_attrs: &Some(Regex::new("^givenname$").unwrap()),
             rewrite_rules: &Vec::new(),
             dry_run: false,
+            old_sync_datetime: Some(Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap()),
         };
-        let date_time = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
 
-        
-        let result = synchronization.synchronize(Some(date_time)).await.unwrap();
-
+        let result = synchronization.synchronize().await.unwrap();
 
         info!("result: {:?}", result);
         assert_eq!(result.recently_modified, 3); // of 5. one entry is very old
@@ -1243,10 +1281,11 @@ mod test {
         assert_eq!(result.deleted, 1);
 
         let mut target_ldap = simple_connect(&target_service).await.unwrap();
-        let after = search_all(&mut target_ldap, &target_service.base_dn).await.unwrap();
+        let after = search_all(&mut target_ldap, &target_service.base_dn)
+            .await
+            .unwrap();
         print!("after {:?}", after);
 
         assert_vec_search_entries_eq(&after, &expected);
     }
-
 }
