@@ -4,6 +4,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
 use regex::Regex;
+use std::time::Duration;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -145,6 +146,7 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
             ..
         } => {
             debug!(r#"binding using DN: "{}""#, &bdn);
+            ldap.with_timeout( Duration::from_secs(60));
             let _ldap_result = ldap.simple_bind(&bdn, &pw).await?.success()?;
         }
         _ => {}
@@ -197,6 +199,7 @@ pub async fn search_norm_dns(
         r#"search_norm_dns: search for DNs from base: "{}""#,
         base_dn
     );
+    ldap.with_timeout( Duration::from_secs(60));
     let search_result = ldap
         .search(base_dn, Scope::Subtree, filter, vec!["dn"])
         .await?
@@ -223,6 +226,7 @@ pub async fn search_one_entry_by_dn(
     attrs: &Vec<String>,
 ) -> Result<SearchEntry, LdapError> {
     debug!(r#"search_one_entry_by_dn: "{}""#, dn);
+    ldap.with_timeout( Duration::from_secs(60));
     let search_result = ldap
         .search(dn, Scope::Base, "(objectClass=*)", attrs)
         .await?
@@ -588,6 +592,7 @@ pub mod test {
 
     pub async fn search_all(ldap: &mut Ldap, base_dn: &str) -> Result<Vec<SearchEntry>, LdapError> {
         debug!("search all");
+        ldap.with_timeout( Duration::from_secs(60));
         let search_result = ldap
             .search(base_dn, Scope::Subtree, "(objectClass=*)", vec!["*"])
             .await?;

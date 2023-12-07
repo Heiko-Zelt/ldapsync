@@ -867,4 +867,25 @@ mod test {
         // Trick mit format!(), weil PartialEq nicht für alle Teile implementiert ist
         assert_eq!(format!("{:?}", result), expected);
     }
+
+    /// test LS_EXCLUDE_DNS example.
+    /// exclude local and non-ASCII-DNs.
+    /// The DNs are filterd by comparing with the Regex after the base dn was truncated.
+    /// 
+    /// In search_norm_dns() wird zusätzlich vorher auf Kleinschreibung normiert.
+    /// In search_modified_entries_and_rewrite() nicht. :-(
+    /// TODO: Filter vereinheitlichen
+    #[rstest]
+    #[case("cn=organization 1", false)]
+    #[case("cn=Organization #1", false)]
+    #[case("cn=organization 1,cn=local", true)]
+    #[case("cn=organization 1,cn=LOCAL", true)]
+    #[case("cn=münchen", true)]
+    #[case("cn=münchen,cn=local", true)]
+    #[case("cn=münchen,cn=LOCAL", true)]
+    fn test_regex(#[case] s: &str, #[case] expected: bool) {
+        // detect visible ascii characters
+        let r = Regex::new(r#"[^ -~]|(?i)cn=local"#).unwrap(); 
+        assert_eq!(r.is_match(s), expected);
+    }
 }
