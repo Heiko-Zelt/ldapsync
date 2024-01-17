@@ -94,29 +94,36 @@ pub fn join_3_dns(periphery_dn: &str, middle_dn: &str, base_dn: &str) -> String 
     join_2_dns(&join_2_dns(periphery_dn, middle_dn), base_dn)
 }
 
-/// Truncates the base DN from DN in place
+/// Truncates the base DN from DN.
+/// Assuming the DN ends with the given base DN.
 /// dn: ""                , base_dn: ""        -> ""
 /// dn: "dc=test"         , base_dn: ""        -> "dc=test"
 /// dn: "dc=test"         , base_dn: "dc=test" -> ""
 /// dn: "cn=Users,dc=test", base_dn: "dc=test" -> "cn=Users" Normalfall
-pub fn truncate_dn(dn: &mut String, base_dn_len: usize) {
+/// additional spaces after commas are removed from DN.
+/// additional spaces have to be absent in base DN.
+/// case is preserved.
+pub fn truncate_dn(dn: &str, base_dn_len: usize) -> String {
+    println!("dn: {}", dn);
+    let mut replaced = dn.replace(", ", ",");
+    println!("replaced: {}", replaced);
     if base_dn_len == 0 {
         // nichts abscheiden
-        return;
+        return replaced;
     }
-    if dn.len() == base_dn_len {
+    if replaced.len() == base_dn_len {
         // Leerstring
-        dn.clear();
-        return;
+        return String::from("");
     }
     // Normalfall
-    dn.truncate(dn.len() - base_dn_len - 1); // comma auch abschneiden
+    replaced.truncate(replaced.len() - base_dn_len - 1); // comma auch abschneiden
+    println!("truncated: {}", dn);
+    return replaced
 }
 
-/// truncate base DN and convert to lowercase
-pub fn normalize_dn(dn: &mut String, base_dn_len: usize) -> String {
-    truncate_dn(dn, base_dn_len);
-    dn.to_lowercase()
+/// convert to lowercase, trim spaces after commas and truncate base DN
+pub fn normalize_dn(dn: &str, base_dn_len: usize) -> String {
+    return truncate_dn(&dn.to_lowercase(), base_dn_len);
 }
 
 pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
@@ -169,9 +176,7 @@ pub fn result_entries_to_norm_dns(
     // TODO stream processing, inter().map().filter().collect()
     for result_entry in result_entries {
         let search_entry = SearchEntry::construct(result_entry.clone());
-        let mut dn = search_entry.dn;
-        truncate_dn(&mut dn, base_dn_len); // in bytes (not characters)
-        let norm_dn = dn.to_lowercase();
+        let norm_dn = normalize_dn(&search_entry.dn, base_dn_len);
         match exclude_dns {
             Some(regex) => {
                 if regex.is_match(&norm_dn) {
@@ -327,7 +332,8 @@ pub async fn search_modified_entries_and_rewrite(
         match result_entry {
             Some(entry) => {
                 let mut search_entry = SearchEntry::construct(entry.clone());
-                truncate_dn(&mut search_entry.dn, base_dn_len);
+                // TODO prio 1: remove commas, truncate, but not lowercase
+                search_entry.dn = truncate_dn(&search_entry.dn, base_dn_len);
                 match exclude_dns {
                     Some(regex) => {
                         if regex.is_match(&search_entry.dn) {
@@ -563,11 +569,24 @@ pub mod test {
     #[case("cn=Users,dc=test", "dc=test", "cn=Users")] // Normalfall
     #[case("cn=Users,dc=test", "", "cn=Users,dc=test")] // nichts wird abgeschnitten
     #[case("dc=test", "dc=test", "")] // nur Leerstring bleibt übrig
+    #[case("cn=Users, dc=test", "dc=test", "cn=Users")] // zusätzliches Leerzeichen im DN
     #[case("", "", "")] // Extrembeispiel
     fn test_truncate_dn(#[case] given_dn: &str, #[case] base_dn: &str, #[case] expected: &str) {
-        let mut dn = given_dn.to_string();
-        truncate_dn(&mut dn, base_dn.len());
-        assert_eq!(dn, expected);
+        let result = truncate_dn(given_dn, base_dn.len());
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case("cn=Users,dc=test", "dc=test", "cn=users")] // Normalfall
+    #[case("cn=Users,dc=test", "", "cn=users,dc=test")] // nichts wird abgeschnitten
+    #[case("dc=test", "dc=test", "")] // nur Leerstring bleibt übrig
+    #[case("", "", "")] // Extrembeispiel
+    #[case("cn=Users, dc=test", "dc=test", "cn=users")] // zusätzliches Leerzeichen im DN
+    #[case("Cn=Us012345, cn=Users, dc=test", "cn=Users,dc=test", "cn=us012345")] // zusätzliches Leerzeichen im Base-DN
+    fn test_normalize_dn(#[case] given_dn: &str, #[case] base_dn: &str, #[case] expected: &str) {
+        let base_norm_dn = normalize_dn(base_dn, 0);
+        let result = normalize_dn(given_dn, base_norm_dn.len());
+        assert_eq!(result, expected);
     }
 
     pub async fn start_test_server(
@@ -1368,7 +1387,19 @@ pub mod test {
             objectClass: inetOrgPerson
             cn: us012345
             sn: Müller
-            modifyTimestamp: 19750101235959Z"
+            modifyTimestamp: 19750101235959Z
+            
+            dn: cn=us055555, ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: us055555
+            sn: Abou-Sound
+            modifyTimestamp: 19750505235959Z
+            
+            dn: cn=us\\,04444, ou=Users,dc=test
+            objectClass: inetOrgPerson
+            cn: us055555
+            sn: Abou-Sound
+            modifyTimestamp: 19750505235959Z"
         };
         let service = LdapService {
             url: url,
@@ -1379,7 +1410,7 @@ pub mod test {
         let _server = start_test_server(plain_port, &base_dn, content).await;
         let mut ldap_conn = simple_connect(&service).await.unwrap();
 
-        let expected_dns: HashSet<String> = vec!["".to_string(), "cn=us012345".to_string()]
+        let expected_dns: HashSet<String> = vec!["".to_string(), "cn=us012345".to_string(), "cn=us055555".to_string(), "cn=us\\2c04444".to_string()]
             .into_iter()
             .collect();
 

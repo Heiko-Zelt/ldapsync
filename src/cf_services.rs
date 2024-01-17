@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use crate::ldap_utils::normalize_dn;
 
 #[derive(Debug, PartialEq)]
 pub enum LdapServiceError {
@@ -77,7 +78,7 @@ pub struct ServiceNameTwice;
 
 /// converts the Cloud Foundry JSON structure in a more convinient map.
 /// There must be "user-provided" services.
-/// TODO Error, wenn 2 Services mit gleichem Namen existieren.
+/// by the way, normalize base DNs.
 pub fn map_ldap_services(services_vec: &Vec<Service>) -> Result<HashMap<String, LdapService>, ServiceNameTwice> {
     // detect if there are duplicates
     let mut unique_names = HashSet::new();
@@ -95,7 +96,7 @@ pub fn map_ldap_services(services_vec: &Vec<Service>) -> Result<HashMap<String, 
                 url: service.credentials.url.clone(),
                 bind_dn: service.credentials.bind_dn.clone(),
                 password: service.credentials.password.clone(),
-                base_dn: service.credentials.base_dn.clone(),
+                base_dn: normalize_dn(&service.credentials.base_dn, 0),
             };
             (service.name.clone(), ldap_service)
         })
@@ -214,7 +215,7 @@ mod test {
             url: "ldap://ldap1.provider.de:389".to_string(),
             bind_dn: Some("cn=admin1,dc=de".to_string()),
             password: Some("secret1".to_string()),
-            base_dn: "dc=de".to_string(),
+            base_dn: "dc=De".to_string(),
         };
         let service = Service {
             binding_guid: None,
