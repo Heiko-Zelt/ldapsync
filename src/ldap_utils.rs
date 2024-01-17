@@ -104,9 +104,9 @@ pub fn join_3_dns(periphery_dn: &str, middle_dn: &str, base_dn: &str) -> String 
 /// additional spaces have to be absent in base DN.
 /// case is preserved.
 pub fn truncate_dn(dn: &str, base_dn_len: usize) -> String {
-    println!("dn: {}", dn);
+    //println!("dn: {}", dn);
     let mut replaced = dn.replace(", ", ",");
-    println!("replaced: {}", replaced);
+    //println!("replaced: {}", replaced);
     if base_dn_len == 0 {
         // nichts abscheiden
         return replaced;
@@ -117,7 +117,7 @@ pub fn truncate_dn(dn: &str, base_dn_len: usize) -> String {
     }
     // Normalfall
     replaced.truncate(replaced.len() - base_dn_len - 1); // comma auch abschneiden
-    println!("truncated: {}", dn);
+    //println!("truncated: {}", dn);
     return replaced
 }
 
