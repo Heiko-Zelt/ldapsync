@@ -103,9 +103,16 @@ pub fn join_3_dns(periphery_dn: &str, middle_dn: &str, base_dn: &str) -> String 
 /// additional spaces after commas are removed from DN.
 /// additional spaces have to be absent in base DN.
 /// case is preserved.
+
 pub fn truncate_dn(dn: &str, base_dn_len: usize) -> String {
     //println!("dn: {}", dn);
     let mut replaced = dn.replace(", ", ",");
+
+    // In an Oracle Internet Directory I found a DN which ended with 0x0d = carriage return (after base DN).
+    if replaced.ends_with("\r") {
+       replaced.truncate(replaced.len() - 1);
+    }
+
     //println!("replaced: {}", replaced);
     if base_dn_len == 0 {
         // nichts abscheiden
