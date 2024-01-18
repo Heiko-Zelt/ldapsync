@@ -225,7 +225,7 @@ impl<'a> Synchronization<'a> {
     ///
     /// returns: Wenn erfolgreich: Anzahl der abgeglichenen Einträge (add + modify)
     ///
-    /// TODO vollständig implementieren
+    /// TODO ignore case for values of attribute objectclass (and maybe others).
     pub async fn sync_modify(
         source_ldap: &mut Ldap,
         target_ldap: &mut Ldap,
