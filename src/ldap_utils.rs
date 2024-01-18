@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use ldap3::{Ldap, LdapConnAsync, LdapError, Mod, ResultEntry, Scope, SearchEntry};
 use log::{debug, info};
 use regex::Regex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -145,11 +145,15 @@ pub fn format_ldap_timestamp(date_time: &DateTime<Utc>) -> String {
     )
 }
 
+/// Baut eine Verbindung zum LDAP-Server auf und führt eine Authentifizierung durch,
+/// falls Benutzername und Passwort angegeben sind.
 pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
     debug!(r#"connecting using URL: "{}""#, &service.url);
+    let now1 = Instant::now();
     let (conn, mut ldap) = LdapConnAsync::new(&service.url).await?;
     // returns type ldap3::result::Result<(LdapConnAsync, Ldap)>
     // ldap3::result::Result is Result<T> = Result<T, LdapError> is Result<(LdapConnAsync, Ldap), LdapError>
+    debug!("connect duration: {} ms", now1.elapsed().as_millis());
 
     ldap3::drive!(conn);
 
@@ -160,8 +164,10 @@ pub async fn simple_connect(service: &LdapService) -> Result<Ldap, LdapError> {
             ..
         } => {
             debug!(r#"binding using DN: "{}""#, &bdn);
+            let now2 = Instant::now();
             ldap.with_timeout( Duration::from_secs(60));
             let _ldap_result = ldap.simple_bind(&bdn, &pw).await?.success()?;
+            debug!("simple bind duration: {} ms", now2.elapsed().as_millis());
         }
         _ => {}
     }
@@ -212,10 +218,12 @@ pub async fn search_norm_dns(
         base_dn
     );
     ldap.with_timeout( Duration::from_secs(60));
+    let now1 = Instant::now();
     let search_result = ldap
         .search(base_dn, Scope::Subtree, filter, vec!["dn"])
         .await?
         .success()?;
+    debug!("search DNs duration: {} ms", now1.elapsed().as_millis());
 
     //SearchResult tuple fields:
     //  0: Vec<ResultEntry>
@@ -239,10 +247,12 @@ pub async fn search_one_entry_by_dn(
 ) -> Result<SearchEntry, LdapError> {
     debug!(r#"search_one_entry_by_dn: "{}""#, dn);
     ldap.with_timeout( Duration::from_secs(60));
+    let now1 = Instant::now();
     let search_result = ldap
         .search(dn, Scope::Base, "(objectClass=*)", attrs)
         .await?
         .success()?;
+    debug!("search one entry duration: {} ms", now1.elapsed().as_millis());
     let result_entries = search_result.0;
     debug!(
         "search_one_entry_by_dn: found number of entries: {}",
@@ -329,6 +339,7 @@ pub async fn search_modified_entries_and_rewrite(
         r#"search_modified_entries_attrs_filtered with base: "{}", filter: "{}", exclude_dns: {:?}, attrs: {:?}, exclude_attrs: {:?}, rewrite_rules: {:?}"#,
         base_dn, filter, exclude_dns, attrs, exclude_attrs, rewrite_rules
     );
+    let now1 = Instant::now();
     let mut search_stream = ldap
         .streaming_search(&base_dn, Scope::Subtree, &complete_filter, attrs)
         .await?;
@@ -364,6 +375,8 @@ pub async fn search_modified_entries_and_rewrite(
         }
     }
     let _ldap_result = search_stream.finish().await.success()?;
+    debug!("search modified entries duration: {} ms", now1.elapsed().as_millis());
+
     Ok(search_entries)
 }
 
